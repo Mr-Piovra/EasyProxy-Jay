@@ -19,7 +19,19 @@ def setup_recording_routes(app, recording_manager):
         )
         try:
             with open(template_path, 'r', encoding='utf-8') as f:
-                return web.Response(text=f.read(), content_type='text/html')
+                html = f.read()
+                
+            try:
+                import subprocess
+                repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                commit_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=repo_dir, stderr=subprocess.DEVNULL).decode('utf-8').strip()
+                commit_msg = subprocess.check_output(['git', 'log', '-1', '--pretty=%s'], cwd=repo_dir, stderr=subprocess.DEVNULL).decode('utf-8').strip()
+                version_str = f"Commit: {commit_hash} - {commit_msg}"
+            except Exception as e:
+                version_str = f"Git Version Unknown ({e})"
+                
+            html = html.replace('<!-- GIT_VERSION_PLACEHOLDER -->', version_str)
+            return web.Response(text=html, content_type='text/html')
         except FileNotFoundError:
             return web.Response(text="Recordings template not found",
                                status=404)
