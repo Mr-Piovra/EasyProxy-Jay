@@ -217,7 +217,16 @@ fi
 
 echo "Starting EasyProxy on port $PORT..."
 cd /root/EasyProxy
-python3 -c "from app import app; from aiohttp import web; web.run_app(app, host='0.0.0.0', port=$PORT)"
+
+# Esegue l'app e cattura l'eventuale errore se va in crash
+if ! python3 app.py; then
+    echo ""
+    echo "[CRITICAL ERROR] EasyProxy ha fallito l'avvio!"
+    echo "====== ULTIMI LOG DI ERRORE ======"
+    tail -n 30 "$LOG_FILE"
+    echo "=================================="
+    exit 1
+fi
 LAUNCHER_EOF
 chmod +x "$PROOT_ROOTFS/easyproxy_start.sh"
 
@@ -268,7 +277,7 @@ cat > "$PREFIX/bin/easyproxy-update" << 'UPD_EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 echo "Pulling latest EasyProxy updates..."
 easyproxy-stop 2>/dev/null || true
-proot-distro login ubuntu -- bash -c "cd /root/EasyProxy && git fetch && git reset --hard origin/main && source venv/bin/activate && pip install -r requirements.txt --upgrade"
+proot-distro login ubuntu -- bash -c "cd /root/EasyProxy && git fetch && git reset --hard origin/main && pip install -r requirements.txt --upgrade --break-system-packages"
 echo "EasyProxy system updated successfully!"
 easyproxy
 UPD_EOF

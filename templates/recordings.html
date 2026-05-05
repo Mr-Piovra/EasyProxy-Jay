@@ -542,6 +542,14 @@
             <div id="autoRecordStatus" style="color: var(--text-secondary); font-size:0.875rem;">
                 Caricamento stato...
             </div>
+            <div class="form-group" style="margin-top: 1rem; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1rem;">
+                <label class="form-label" for="autoRecordTimeout">Timeout inattività stream (minuti)</label>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <input type="number" id="autoRecordTimeout" class="form-input" min="0" style="max-width: 100px;">
+                    <button class="btn btn-secondary btn-sm" onclick="saveTimeout()">Salva</button>
+                </div>
+                <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">Se nessun dispositivo guarda la diretta per questi minuti, l'auto-record si ferma (0 = infinito).</p>
+            </div>
         </div>
 
         <div class="card">
@@ -630,15 +638,20 @@
             return headers;
         }
 
-        // --- DVR Config: Auto-Recording Toggle ---
+        // --- DVR Config: Auto-Recording Toggle & Timeout ---
         async function loadDvrConfig() {
             try {
                 const resp = await fetch(`/api/dvr/config${getAuthParams()}`, { headers: getAuthHeaders() });
                 if (!resp.ok) return;
                 const data = await resp.json();
+                
                 const toggle = document.getElementById('autoRecordToggle');
                 const status = document.getElementById('autoRecordStatus');
+                const timeoutInput = document.getElementById('autoRecordTimeout');
+                
                 toggle.checked = data.auto_record;
+                timeoutInput.value = data.auto_record_timeout || 5;
+                
                 const segMin = data.segment_minutes || 10;
                 if (data.auto_record) {
                     status.innerHTML = `<span style="color:var(--accent-error)">🔴 Attivo</span> &mdash; le dirette vengono registrate automaticamente in segmenti da <strong>${segMin} min</strong>.`;
@@ -647,6 +660,24 @@
                 }
             } catch (e) {
                 document.getElementById('autoRecordStatus').textContent = 'Impossibile caricare la configurazione DVR.';
+            }
+        }
+
+        async function saveTimeout() {
+            const timeoutVal = document.getElementById('autoRecordTimeout').value;
+            try {
+                const resp = await fetch(`/api/dvr/config${getAuthParams()}`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ auto_record_timeout: parseInt(timeoutVal) })
+                });
+                if (resp.ok) {
+                    showToast(`Timeout impostato a ${timeoutVal} minuti`);
+                } else {
+                    showToast('Errore salvataggio timeout', 'error');
+                }
+            } catch(e) {
+                showToast('Errore rete', 'error');
             }
         }
 

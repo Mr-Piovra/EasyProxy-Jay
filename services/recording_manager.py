@@ -56,6 +56,11 @@ class RecordingManager:
         # Ogni segmento dura DVR_SEGMENT_MINUTES minuti (default 10 = ~600MB)
         self.segment_seconds = DVR_SEGMENT_MINUTES * 60
 
+        # Stato per Auto-Record Timeout
+        self.last_accessed: Dict[str, float] = {}
+        self.auto_recordings = set()
+        self.manual_stops: Dict[str, float] = {}
+
         if not os.path.exists(self.recordings_dir):
             os.makedirs(self.recordings_dir)
 
@@ -319,7 +324,8 @@ class RecordingManager:
         url: str,
         name: Optional[str] = None,
         duration: Optional[int] = None,
-        clearkey: Optional[str] = None
+        clearkey: Optional[str] = None,
+        is_auto: bool = False
     ) -> Optional[Dict[str, Any]]:
         """
         Start recording a stream.
@@ -361,7 +367,7 @@ class RecordingManager:
             duration = self.max_duration
 
         # Prepare stream-specific configuration
-        config = await self._prepare_stream_config(url, clearkey)
+        config = await self._prepare_stream_config(url)
 
         # Build FFmpeg command
         cmd = self._build_ffmpeg_command(config, file_path, duration)
@@ -379,6 +385,10 @@ class RecordingManager:
 
             self.processes[recording_id] = process
             self.start_times[recording_id] = time.time()
+            
+            if is_auto:
+                self.auto_recordings.add(recording_id)
+                self.last_accessed[recording_id] = time.time()
 
             self.db.update_to_recording(
                 recording_id=recording_id,
@@ -397,12 +407,24 @@ class RecordingManager:
             self.db.update_recording_status(recording_id, 'failed', str(e))
             return None
 
-    async def stop_recording(self, recording_id: str) -> bool:
+    async def stop_recording(self, recording_id: str, manual_stop: bool = True) -> bool:
         """
         Stop an active recording.
 
         Supports multi-worker: if process not in local dict, use PID from DB.
         """
+        # Se lo sto fermando a mano, aggiungilo in blacklist temporanea
+        if manual_stop:
+            rec = self.db.get_recording(recording_id)
+            if rec:
+                self.manual_stops[rec['url']] = time.time()
+                # Aggiunge anche l'URL upstream estratto dal proxy_url se presente
+                import urllib.parse
+                parsed = urllib.parse.urlparse(rec['url'])
+                qs = urllib.parse.parse_qs(parsed.query)
+                if 'd' in qs:
+                    self.manual_stops[qs['d'][0]] = time.time()
+
         recording = self.db.get_recording(recording_id)
         if not recording:
             logger.warning(f"Recording {recording_id} not found in database")
@@ -497,6 +519,14 @@ class RecordingManager:
                 # ✅ DVR: somma tutti i segmenti, non solo il primo file
                 file_size = self.db.get_total_size(recording_id)
                 self.db.update_recording_file_info(recording_id, rec_duration, file_size)
+
+                # ✅ Timeout di inattività per auto-record
+                if recording_id in self.auto_recordings:
+                    timeout_mins = self.auto_record_timeout
+                    last_acc = self.last_accessed.get(recording_id, time.time())
+                    if timeout_mins > 0 and (time.time() - last_acc) > (timeout_mins * 60):
+                        logger.info(f"🛑 DVR: Auto-stop per inattività stream su {recording_id}")
+                        await self.stop_recording(recording_id, manual_stop=False)
 
         except asyncio.CancelledError:
             pass
@@ -680,3 +710,29 @@ class RecordingManager:
         icon = '🔴' if enabled else '⏹️'
         state = 'abilitato' if enabled else 'disabilitato'
         logger.info(f"{icon} Auto-DVR {state}")
+
+    @property
+    def auto_record_timeout(self) -> int:
+        """Minuti di inattività prima che auto-record si fermi da solo."""
+        val = self.db.get_dvr_config('auto_record_timeout')
+        if val is None:
+            return 5  # Default 5 minuti
+        return int(val)
+
+    @auto_record_timeout.setter
+    def auto_record_timeout(self, minutes: int) -> None:
+        self.db.set_dvr_config('auto_record_timeout', str(minutes))
+        logger.info(f"⏱️ DVR: Timeout inattività impostato a {minutes} minuti")
+
+    def touch_recording_by_url(self, stream_url: str):
+        """Aggiorna il timestamp di accesso per l'auto-record timeout e rinnova la blacklist se l'utente sta ancora guardando."""
+        for rec in self.get_active_recordings():
+            if stream_url in rec.get('url', ''):
+                rec_id = rec['id']
+                if rec_id in self.auto_recordings:
+                    self.last_accessed[rec_id] = time.time()
+                    
+        # Se l'utente ha bloccato a mano lo stream, rinnova il blocco
+        # fintanto che continua a guardarlo (per non far ricreare file a loop)
+        if stream_url in self.manual_stops:
+            self.manual_stops[stream_url] = time.time()

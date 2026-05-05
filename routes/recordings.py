@@ -292,12 +292,13 @@ def setup_recording_routes(app, recording_manager):
             return web.json_response({"error": "Unauthorized"}, status=401)
         return web.json_response({
             "auto_record": recording_manager.auto_record,
+            "auto_record_timeout": recording_manager.auto_record_timeout,
             "segment_minutes": recording_manager.segment_seconds // 60,
         })
 
     async def handle_set_dvr_config(request):
         """POST /api/dvr/config - Aggiorna la configurazione DVR.
-        Body JSON: { "auto_record": true/false }
+        Body JSON: { "auto_record": true/false, "auto_record_timeout": 5 }
         """
         if not check_password(request):
             return web.json_response({"error": "Unauthorized"}, status=401)
@@ -305,10 +306,15 @@ def setup_recording_routes(app, recording_manager):
             data = await request.json()
         except Exception:
             return web.json_response({"error": "Invalid JSON"}, status=400)
+            
         if 'auto_record' in data:
             recording_manager.auto_record = bool(data['auto_record'])
+        if 'auto_record_timeout' in data:
+            recording_manager.auto_record_timeout = int(data['auto_record_timeout'])
+            
         return web.json_response({
             "auto_record": recording_manager.auto_record,
+            "auto_record_timeout": recording_manager.auto_record_timeout,
             "segment_minutes": recording_manager.segment_seconds // 60,
         })
 

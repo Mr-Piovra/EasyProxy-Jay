@@ -350,21 +350,40 @@ async def _auto_record_live_stream(stream_url: str, proxy_url: str, recording_ma
     evitando la creazione di micro-file causati da piccoli sbalzi di connessione del player.
     """
     try:
+        # Pulisce manual_stops scaduti in base al timeout configurato
+        now = time.time()
+        timeout_seconds = recording_manager.auto_record_timeout * 60
+        for k, v in list(recording_manager.manual_stops.items()):
+            if now - v > timeout_seconds:
+                del recording_manager.manual_stops[k]
+                
+        # Check se fermato a mano recentemente e l'utente lo sta ancora guardando
+        if stream_url in recording_manager.manual_stops:
+            return
+
         # Prevenzione micro-file: controlla tutte le registrazioni attive
         active_recs = recording_manager.get_active_recordings()
         for rec in active_recs:
             if stream_url in rec.get('url', ''):
                 return  # Già in registrazione, skip silenzioso
         
-        # Genera nome dal dominio
-        from urllib.parse import urlparse
+        # Genera nome dal dominio (estrattore url annidato se è localhost)
+        from urllib.parse import urlparse, parse_qs
         import datetime
         parsed = urlparse(stream_url)
-        name = f"{parsed.netloc or 'live'} - {datetime.datetime.now().strftime('%d/%m %H:%M')}"
+        netloc = parsed.netloc
+        if '127.0.0.1' in netloc or 'localhost' in netloc:
+            qs = parse_qs(parsed.query)
+            if 'd' in qs:
+                netloc = urlparse(qs['d'][0]).netloc
+            elif 'url' in qs:
+                netloc = urlparse(qs['url'][0]).netloc
+                
+        name = f"{netloc or 'live'} - {datetime.datetime.now().strftime('%d/%m %H:%M')}"
         
         logger.info(f"🔴 Auto-DVR: avvio registrazione automatica per {stream_url[:60]}...")
         # ✅ Fornisce a FFmpeg il proxy_url interno (127.0.0.1) così sfrutta la cache e la stabilità del proxy!
-        await recording_manager.start_recording(url=proxy_url, name=name)
+        await recording_manager.start_recording(url=proxy_url, name=name, is_auto=True)
     except Exception as e:
         logger.warning(f"⚠️ Auto-DVR: errore nell'avvio della registrazione: {e}")
 
@@ -3469,15 +3488,16 @@ class HLSProxy:
                     #   3. Solo se recording_manager è disponibile (DVR_ENABLED=true)
                     #   4. Solo se auto_record è attivato dall'utente via UI
                     _rm = request.app.get('recording_manager')
-                    if (_rm is not None
-                            and request.path in ('/proxy/hls/manifest.m3u8', '/proxy/manifest.m3u8')
-                            and '#EXT-X-ENDLIST' not in manifest_content
-                            and _rm.auto_record):
-                        from config import PORT
-                        _proxy_url = f"http://127.0.0.1:{PORT}{request.path_qs}"
-                        asyncio.create_task(
-                            _auto_record_live_stream(stream_url, _proxy_url, _rm)
-                        )
+                    if _rm is not None and request.path in ('/proxy/hls/manifest.m3u8', '/proxy/manifest.m3u8'):
+                        # Mantiene in vita un'eventuale registrazione automatica pre-esistente
+                        _rm.touch_recording_by_url(stream_url)
+                        
+                        if '#EXT-X-ENDLIST' not in manifest_content and _rm.auto_record:
+                            from config import PORT
+                            _proxy_url = f"http://127.0.0.1:{PORT}{request.path_qs}"
+                            asyncio.create_task(
+                                _auto_record_live_stream(stream_url, _proxy_url, _rm)
+                            )
 
                     return web.Response(text=rewritten, headers={
                         "Content-Type": "application/vnd.apple.mpegurl",
