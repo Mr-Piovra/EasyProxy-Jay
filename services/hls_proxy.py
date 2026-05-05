@@ -383,7 +383,7 @@ async def _auto_record_live_stream(stream_url: str, proxy_url: str, recording_ma
         
         logger.info(f"🔴 Auto-DVR: avvio registrazione automatica per {stream_url[:60]}...")
         # ✅ Fornisce a FFmpeg il proxy_url interno (127.0.0.1) così sfrutta la cache e la stabilità del proxy!
-        await recording_manager.start_recording(url=proxy_url, name=name, is_auto=True)
+        await recording_manager.start_recording(url=proxy_url, name=name, is_auto=True, original_stream_url=stream_url)
     except Exception as e:
         logger.warning(f"⚠️ Auto-DVR: errore nell'avvio della registrazione: {e}")
 

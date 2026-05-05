@@ -60,6 +60,7 @@ class RecordingManager:
         self.last_accessed: Dict[str, float] = {}
         self.auto_recordings = set()
         self.manual_stops: Dict[str, float] = {}
+        self.original_stream_urls: Dict[str, str] = {}
 
         if not os.path.exists(self.recordings_dir):
             os.makedirs(self.recordings_dir)
@@ -325,7 +326,8 @@ class RecordingManager:
         name: Optional[str] = None,
         duration: Optional[int] = None,
         clearkey: Optional[str] = None,
-        is_auto: bool = False
+        is_auto: bool = False,
+        original_stream_url: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Start recording a stream.
@@ -389,6 +391,8 @@ class RecordingManager:
             if is_auto:
                 self.auto_recordings.add(recording_id)
                 self.last_accessed[recording_id] = time.time()
+                if original_stream_url:
+                    self.original_stream_urls[recording_id] = original_stream_url
 
             self.db.update_to_recording(
                 recording_id=recording_id,
@@ -418,7 +422,12 @@ class RecordingManager:
             rec = self.db.get_recording(recording_id)
             if rec:
                 self.manual_stops[rec['url']] = time.time()
-                # Aggiunge anche l'URL upstream estratto dal proxy_url se presente
+                
+                orig_url = self.original_stream_urls.get(recording_id)
+                if orig_url:
+                    self.manual_stops[orig_url] = time.time()
+                    
+                # Aggiunge anche l'URL upstream estratto dal proxy_url se presente (fallback)
                 import urllib.parse
                 parsed = urllib.parse.urlparse(rec['url'])
                 qs = urllib.parse.parse_qs(parsed.query)
