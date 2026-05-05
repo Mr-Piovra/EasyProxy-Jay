@@ -309,6 +309,8 @@ class RecordingManager:
             "-f", "segment",
             "-segment_time", str(self.segment_seconds),
             "-segment_format", "mpegts",
+            "-segment_list", output_path.replace("%Y%m%d_%H%M%S", "playlist") + ".m3u8",
+            "-segment_list_type", "m3u8",
             "-strftime", "1",
             "-reset_timestamps", "1",
             output_path,  # deve contenere %Y%m%d_%H%M%S
@@ -421,18 +423,27 @@ class RecordingManager:
         if manual_stop:
             rec = self.db.get_recording(recording_id)
             if rec:
-                self.manual_stops[rec['url']] = time.time()
+                import urllib.parse
                 
+                # Blacklist della sessione (base_path) invece dell'URL esatto
                 orig_url = self.original_stream_urls.get(recording_id)
                 if orig_url:
                     self.manual_stops[orig_url] = time.time()
+                    parsed_orig = urllib.parse.urlparse(orig_url)
+                    base_path = f"{parsed_orig.scheme}://{parsed_orig.netloc}{os.path.dirname(parsed_orig.path)}"
+                    self.manual_stops[base_path] = time.time()
                     
+                self.manual_stops[rec['url']] = time.time()
+                
                 # Aggiunge anche l'URL upstream estratto dal proxy_url se presente (fallback)
-                import urllib.parse
                 parsed = urllib.parse.urlparse(rec['url'])
                 qs = urllib.parse.parse_qs(parsed.query)
                 if 'd' in qs:
-                    self.manual_stops[qs['d'][0]] = time.time()
+                    d_url = qs['d'][0]
+                    self.manual_stops[d_url] = time.time()
+                    parsed_d = urllib.parse.urlparse(d_url)
+                    d_base_path = f"{parsed_d.scheme}://{parsed_d.netloc}{os.path.dirname(parsed_d.path)}"
+                    self.manual_stops[d_base_path] = time.time()
 
         recording = self.db.get_recording(recording_id)
         if not recording:
@@ -741,7 +752,12 @@ class RecordingManager:
                 if rec_id in self.auto_recordings:
                     self.last_accessed[rec_id] = time.time()
                     
-        # Se l'utente ha bloccato a mano lo stream, rinnova il blocco
-        # fintanto che continua a guardarlo (per non far ricreare file a loop)
+        # Se l'utente ha bloccato a mano lo stream, rinnova il blocco per la sessione
+        import urllib.parse
+        parsed = urllib.parse.urlparse(stream_url)
+        base_path = f"{parsed.scheme}://{parsed.netloc}{os.path.dirname(parsed.path)}"
+        
         if stream_url in self.manual_stops:
             self.manual_stops[stream_url] = time.time()
+        elif base_path in self.manual_stops:
+            self.manual_stops[base_path] = time.time()

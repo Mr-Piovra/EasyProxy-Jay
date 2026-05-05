@@ -234,7 +234,27 @@ def setup_recording_routes(app, recording_manager):
 
         is_active = recording.get('is_active', False)
         
-        # Genera un manifest M3U8 on-the-fly che include tutti i segmenti attuali
+        # Usa il manifest generato nativamente da FFmpeg per avere durate ESATTE
+        m3u8_path = os.path.join(recording_manager.recordings_dir, f"{recording_id}.m3u8")
+        if os.path.exists(m3u8_path):
+            import re
+            with open(m3u8_path, 'r') as f:
+                content = f.read()
+            
+            # Riscrive i path relativi (es. file_001.ts) nel path API assoluto
+            rewritten = re.sub(
+                r'^(?!#)(.*\.ts)$',
+                r'/api/recordings/' + recording_id + r'/segments/\1',
+                content,
+                flags=re.MULTILINE
+            )
+            return web.Response(
+                text=rewritten, 
+                content_type="application/vnd.apple.mpegurl",
+                headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache"}
+            )
+            
+        # Fallback per vecchie registrazioni senza .m3u8 nativo
         m3u8 = [
             "#EXTM3U",
             "#EXT-X-VERSION:3",
@@ -247,8 +267,6 @@ def setup_recording_routes(app, recording_manager):
             
         for seg in segments:
             filename = os.path.basename(seg)
-            # Ottieni la dimensione per stimare se il segmento sta ancora crescendo
-            # ma diamogli la durata fissa per semplicità del player
             m3u8.append(f"#EXTINF:{recording_manager.segment_seconds}.0,")
             m3u8.append(f"/api/recordings/{recording_id}/segments/{filename}")
             

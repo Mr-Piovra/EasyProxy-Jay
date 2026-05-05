@@ -357,15 +357,28 @@ async def _auto_record_live_stream(stream_url: str, proxy_url: str, recording_ma
             if now - v > timeout_seconds:
                 del recording_manager.manual_stops[k]
                 
+        import urllib.parse
+        import os
+        parsed_stream = urllib.parse.urlparse(stream_url)
+        base_path = f"{parsed_stream.scheme}://{parsed_stream.netloc}{os.path.dirname(parsed_stream.path)}"
+
         # Check se fermato a mano recentemente e l'utente lo sta ancora guardando
-        if stream_url in recording_manager.manual_stops:
+        if stream_url in recording_manager.manual_stops or base_path in recording_manager.manual_stops:
             return
 
-        # Prevenzione micro-file: controlla tutte le registrazioni attive
+        # Prevenzione micro-file e registrazioni multiple (master vs variant playlist)
         active_recs = recording_manager.get_active_recordings()
         for rec in active_recs:
+            # Controllo fallback legacy
             if stream_url in rec.get('url', ''):
-                return  # Già in registrazione, skip silenzioso
+                return
+            # Controllo robusto tramite original_stream_urls basato sulla sessione
+            orig_url = recording_manager.original_stream_urls.get(rec['id'])
+            if orig_url:
+                parsed_orig = urllib.parse.urlparse(orig_url)
+                orig_base = f"{parsed_orig.scheme}://{parsed_orig.netloc}{os.path.dirname(parsed_orig.path)}"
+                if base_path == orig_base:
+                    return  # Stessa sessione di streaming, skip silenzioso
         
         # Genera nome dal dominio (estrattore url annidato se è localhost)
         from urllib.parse import urlparse, parse_qs
