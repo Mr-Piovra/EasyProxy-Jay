@@ -536,7 +536,7 @@
                 <div>
                     <h2 class="card-title">🔴 Auto-Recording</h2>
                     <p style="color: var(--text-secondary); font-size:0.875rem; margin-top:4px;">
-                        Registra automaticamente le dirette guardate dai dispositivi connessi
+                        Avvia automaticamente una registrazione quando un dispositivo guarda una diretta tramite il proxy
                     </p>
                 </div>
                 <label class="toggle-switch" title="Attiva/disattiva auto-recording">
@@ -553,7 +553,7 @@
                     <input type="number" id="autoRecordTimeout" class="form-input" min="0" style="max-width: 100px;">
                     <button class="btn btn-secondary btn-sm" onclick="saveTimeout()">Salva</button>
                 </div>
-                <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">Se nessun dispositivo guarda la diretta per questi minuti, l'auto-record si ferma (0 = infinito).</p>
+                <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">Se nessun dispositivo richiede lo stream per questi minuti, la registrazione si ferma automaticamente (0 = nessun timeout).</p>
             </div>
         </div>
 
@@ -659,9 +659,9 @@
                 
                 const segMin = data.segment_minutes || 10;
                 if (data.auto_record) {
-                    status.innerHTML = `<span style="color:var(--accent-error)">🔴 Attivo</span> &mdash; le dirette vengono registrate automaticamente in segmenti da <strong>${segMin} min</strong>.`;
+                    status.innerHTML = `<span style="color:var(--accent-error)">🔴 Attivo</span> &mdash; ogni diretta guardata viene registrata in un unico file <strong>.mp4</strong>. La registrazione si ferma dopo <strong>${data.auto_record_timeout || '∞'} min</strong> di inattività.`;
                 } else {
-                    status.innerHTML = `<span style="color:var(--text-muted)">⏹ Disattivo</span> &mdash; segmenti da <strong>${segMin} min</strong>. Attiva il toggle per registrare automaticamente le dirette guardate.`;
+                    status.innerHTML = `<span style="color:var(--text-muted)">⏹ Disattivo</span> &mdash; attiva il toggle per registrare automaticamente le dirette guardate. Ogni registrazione viene salvata come un unico file <strong>.mp4</strong>.`;
                 }
             } catch (e) {
                 document.getElementById('autoRecordStatus').textContent = 'Impossibile caricare la configurazione DVR.';

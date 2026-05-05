@@ -312,12 +312,13 @@ class RecordingManager:
         else:
             cmd.extend(["-map", "0:v:0", "-map", "0:a:0?"])
 
-        # Output diretto a file singolo MP4 con faststart per seek corretto in VLC
-        # -movflags +faststart sposta l'indice (moov atom) all'inizio del file
+        # Output MP4 frammentato: l'indice è distribuito ad ogni keyframe
+        # → il file è seekable in VLC sia durante la registrazione che dopo
+        # → nessuna corruzione in caso di crash di FFmpeg (no moov atom finale)
         cmd.extend(["-c", "copy"])
         cmd.extend([
             "-f", "mp4",
-            "-movflags", "+faststart",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
             output_path
         ])
 
