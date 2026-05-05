@@ -761,7 +761,7 @@
                                 <button class="btn btn-danger btn-sm" onclick="stopRecording('${rec.id}')">Stop</button>
                             ` : `
                                 ${rec.file_size_bytes ? `
-                                    <a href="/api/recordings/${rec.id}/stream${getAuthParams()}" target="_blank" class="btn btn-secondary btn-sm">Play</a>
+                                    <a href="vlc://${window.location.origin}/api/recordings/${rec.id}/stream${getAuthParams()}" class="btn btn-secondary btn-sm">Play in VLC</a>
                                     <a href="/api/recordings/${rec.id}/download${getAuthParams()}" class="btn btn-secondary btn-sm">Download</a>
                                 ` : ''}
                                 <button class="btn btn-danger btn-sm" onclick="openDeleteModal('${rec.id}')">Delete</button>
