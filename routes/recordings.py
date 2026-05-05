@@ -247,7 +247,10 @@ def setup_recording_routes(app, recording_manager):
         is_active = recording.get('is_active', False)
         
         # Usa il manifest generato nativamente da FFmpeg per avere durate ESATTE
-        m3u8_path = os.path.join(recording_manager.recordings_dir, f"{recording_id}.m3u8")
+        db_file_path = recording.get('file_path', '')
+        # Calcola lo stesso m3u8_path che usa recording_manager._build_ffmpeg_command
+        m3u8_path = db_file_path.replace("%Y%m%d_%H%M%S", "playlist") + ".m3u8"
+        
         if os.path.exists(m3u8_path):
             import re
             with open(m3u8_path, 'r') as f:

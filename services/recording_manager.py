@@ -61,6 +61,16 @@ class RecordingManager:
         self.auto_recordings = set()
         self.manual_stops: Dict[str, float] = {}
         self.original_stream_urls: Dict[str, str] = {}
+        
+        # Ripristina lo stato delle sessioni in memoria per le registrazioni attive dal DB
+        for rec in self.db.get_active_recordings():
+            # Tratta tutte le registrazioni attive in background come auto-record
+            # in modo che il timeout si applichi anche a loro
+            self.auto_recordings.add(rec['id'])
+            
+            orig = rec.get('original_url')
+            if orig:
+                self.original_stream_urls[rec['id']] = orig
 
         if not os.path.exists(self.recordings_dir):
             os.makedirs(self.recordings_dir)
@@ -401,7 +411,8 @@ class RecordingManager:
                 file_path=file_path,          # primo segmento (o path base)
                 headers=None,
                 pid=process.pid,
-                segment_pattern=glob_pattern   # pattern per trovare tutti i segmenti
+                segment_pattern=glob_pattern,   # pattern per trovare tutti i segmenti
+                original_url=original_stream_url
             )
 
             asyncio.create_task(self._monitor_recording(recording_id, process))
@@ -752,6 +763,10 @@ class RecordingManager:
                 if rec_id in self.auto_recordings:
                     self.last_accessed[rec_id] = time.time()
                     
+        # Helper: controlla se due path appartengono alla stessa sessione
+        def is_same_session(path1: str, path2: str) -> bool:
+            return path1.startswith(path2) or path2.startswith(path1)
+            
         # Se l'utente ha bloccato a mano lo stream, rinnova il blocco per la sessione
         import urllib.parse
         parsed = urllib.parse.urlparse(stream_url)
@@ -759,5 +774,7 @@ class RecordingManager:
         
         if stream_url in self.manual_stops:
             self.manual_stops[stream_url] = time.time()
-        elif base_path in self.manual_stops:
-            self.manual_stops[base_path] = time.time()
+            
+        for stop_path in list(self.manual_stops.keys()):
+            if stop_path.startswith('http') and is_same_session(base_path, stop_path):
+                self.manual_stops[stop_path] = time.time()

@@ -361,10 +361,17 @@ async def _auto_record_live_stream(stream_url: str, proxy_url: str, recording_ma
         import os
         parsed_stream = urllib.parse.urlparse(stream_url)
         base_path = f"{parsed_stream.scheme}://{parsed_stream.netloc}{os.path.dirname(parsed_stream.path)}"
+        
+        # Helper: controlla se due path appartengono alla stessa sessione
+        def is_same_session(path1: str, path2: str) -> bool:
+            return path1.startswith(path2) or path2.startswith(path1)
 
         # Check se fermato a mano recentemente e l'utente lo sta ancora guardando
-        if stream_url in recording_manager.manual_stops or base_path in recording_manager.manual_stops:
+        if stream_url in recording_manager.manual_stops:
             return
+        for stop_path in recording_manager.manual_stops.keys():
+            if stop_path.startswith('http') and is_same_session(base_path, stop_path):
+                return
 
         # Prevenzione micro-file e registrazioni multiple (master vs variant playlist)
         active_recs = recording_manager.get_active_recordings()
@@ -377,7 +384,7 @@ async def _auto_record_live_stream(stream_url: str, proxy_url: str, recording_ma
             if orig_url:
                 parsed_orig = urllib.parse.urlparse(orig_url)
                 orig_base = f"{parsed_orig.scheme}://{parsed_orig.netloc}{os.path.dirname(parsed_orig.path)}"
-                if base_path == orig_base:
+                if is_same_session(base_path, orig_base):
                     return  # Stessa sessione di streaming, skip silenzioso
         
         # Genera nome dal dominio (estrattore url annidato se è localhost)

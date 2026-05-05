@@ -58,6 +58,14 @@ class RecordingDB:
                 """)
             except Exception:
                 pass  # Colonna già esiste, ignorare
+                
+            # ✅ DVR: Migration sicura — aggiunge original_url se non esiste già
+            try:
+                cursor.execute("""
+                    ALTER TABLE recordings ADD COLUMN original_url TEXT
+                """)
+            except Exception:
+                pass  # Colonna già esiste, ignorare
 
             # ✅ DVR: Tabella di configurazione persistente (auto_record toggle, ecc.)
             cursor.execute("""
@@ -110,15 +118,15 @@ class RecordingDB:
 
     def update_to_recording(self, recording_id: str, file_path: str,
                             headers: str = None, pid: int = None,
-                            segment_pattern: str = None) -> bool:
+                            segment_pattern: str = None, original_url: str = None) -> bool:
         """Update a 'starting' entry to 'recording' after extraction succeeds."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE recordings
-                SET status = 'recording', file_path = ?, headers = ?, pid = ?, segment_pattern = ?
+                SET status = 'recording', file_path = ?, headers = ?, pid = ?, segment_pattern = ?, original_url = ?
                 WHERE id = ? AND status = 'starting'
-            """, (file_path, headers, pid, segment_pattern, recording_id))
+            """, (file_path, headers, pid, segment_pattern, original_url, recording_id))
             return cursor.rowcount > 0
 
     def get_recording(self, recording_id: str) -> Optional[Dict[str, Any]]:
