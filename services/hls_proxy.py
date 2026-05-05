@@ -366,12 +366,33 @@ async def _auto_record_live_stream(stream_url: str, proxy_url: str, recording_ma
         def is_same_session(path1: str, path2: str) -> bool:
             return path1.startswith(path2) or path2.startswith(path1)
 
+        # Inizializza il set dei pending se non esiste
+        if not hasattr(recording_manager, '_pending_auto_records'):
+            recording_manager._pending_auto_records = set()
+
+        # Evita di accodare timeout multipli per la stessa sessione
+        for pending_base in list(recording_manager._pending_auto_records):
+            if is_same_session(base_path, pending_base):
+                return
+
         # Check se fermato a mano recentemente e l'utente lo sta ancora guardando
         if stream_url in recording_manager.manual_stops:
             return
         for stop_path in recording_manager.manual_stops.keys():
             if stop_path.startswith('http') and is_same_session(base_path, stop_path):
                 return
+                
+        # Registra il path come "in attesa"
+        recording_manager._pending_auto_records.add(base_path)
+        
+        # Ritardo strategico di 8 secondi:
+        # Permette al player (es. VLC/Stremio) di avere a disposizione il 100% della 
+        # banda di rete per scaricare i primissimi segmenti e costruirsi il "polmone" (buffer).
+        # Senza questo delay, FFmpeg e il player si ruberebbero la banda a vicenda nel momento critico.
+        await asyncio.sleep(8)
+        
+        # Rimuove il lock di pending
+        recording_manager._pending_auto_records.discard(base_path)
 
         # Prevenzione micro-file e registrazioni multiple (master vs variant playlist)
         active_recs = recording_manager.get_active_recordings()
@@ -386,6 +407,13 @@ async def _auto_record_live_stream(stream_url: str, proxy_url: str, recording_ma
                 orig_base = f"{parsed_orig.scheme}://{parsed_orig.netloc}{os.path.dirname(parsed_orig.path)}"
                 if is_same_session(base_path, orig_base):
                     return  # Stessa sessione di streaming, skip silenzioso
+        
+        # Check di nuovo i manual stops nel caso in cui l'utente abbia chiuso durante i 8 secondi di delay
+        if stream_url in recording_manager.manual_stops:
+            return
+        for stop_path in recording_manager.manual_stops.keys():
+            if stop_path.startswith('http') and is_same_session(base_path, stop_path):
+                return
         
         # Genera nome dal dominio (estrattore url annidato se è localhost)
         from urllib.parse import urlparse, parse_qs

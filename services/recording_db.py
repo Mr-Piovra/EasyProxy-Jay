@@ -237,31 +237,18 @@ class RecordingDB:
             return False
 
     # =========================================================================
-    # Segment Files Helpers
+    # File Size Helper
     # =========================================================================
 
-    def get_segment_files(self, recording_id: str) -> List[str]:
-        """Restituisce la lista dei file segmento per una registrazione.
-        Usa il segment_pattern salvato nel DB per trovare tutti i file tramite glob.
-        """
-        import glob
+    def get_total_size(self, recording_id: str) -> int:
+        """Calcola la dimensione del file della registrazione in bytes."""
         recording = self.get_recording(recording_id)
         if not recording:
-            return []
-        pattern = recording.get('segment_pattern')
-        if pattern:
-            files = sorted(glob.glob(pattern))
-            if files:
-                return files
-        # Fallback: file singolo (vecchio formato)
+            return 0
         fp = recording.get('file_path')
         if fp and os.path.exists(fp):
-            return [fp]
-        return []
-
-    def get_total_size(self, recording_id: str) -> int:
-        """Calcola la dimensione totale di tutti i segmenti in bytes."""
-        return sum(os.path.getsize(f) for f in self.get_segment_files(recording_id) if os.path.exists(f))
+            return os.path.getsize(fp)
+        return 0
 
     # =========================================================================
     # DVR Config (auto_record toggle persistente)

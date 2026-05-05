@@ -312,18 +312,12 @@ class RecordingManager:
         else:
             cmd.extend(["-map", "0:v:0", "-map", "0:a:0?"])
 
-        # ✅ DVR: Segmentazione automatica via -f segment
-        # Output è un pattern strftime es. /recordings/20260505_140000.ts
+        # Output diretto a file singolo MPEG-TS
+        # Il formato .ts è resiliente alle corruzioni in caso di crash
         cmd.extend(["-c", "copy"])
         cmd.extend([
-            "-f", "segment",
-            "-segment_time", str(self.segment_seconds),
-            "-segment_format", "mpegts",
-            "-segment_list", output_path.replace("%Y%m%d_%H%M%S", "playlist") + ".m3u8",
-            "-segment_list_type", "m3u8",
-            "-strftime", "1",
-            "-reset_timestamps", "1",
-            output_path,  # deve contenere %Y%m%d_%H%M%S
+            "-f", "mpegts",
+            output_path
         ])
 
         return cmd
@@ -365,14 +359,8 @@ class RecordingManager:
             logger.info(f"Recording already exists for URL: {url[:80]}...")
             return None
 
-        filename_pattern = self._generate_filename(recording_id, name)
-        # Il pattern contiene %Y%m%d_%H%M%S per ffmpeg -f segment -strftime
-        file_path = os.path.join(self.recordings_dir, filename_pattern)
-        # glob_pattern per trovare tutti i segmenti generati
-        glob_pattern = os.path.join(
-            self.recordings_dir,
-            filename_pattern.replace("%Y%m%d_%H%M%S", "*")
-        )
+        filename = self._generate_filename(recording_id, name)
+        file_path = os.path.join(self.recordings_dir, filename)
 
         # Apply duration limits
         if duration:
@@ -408,10 +396,10 @@ class RecordingManager:
 
             self.db.update_to_recording(
                 recording_id=recording_id,
-                file_path=file_path,          # primo segmento (o path base)
+                file_path=file_path,
                 headers=None,
                 pid=process.pid,
-                segment_pattern=glob_pattern,   # pattern per trovare tutti i segmenti
+                segment_pattern=None,
                 original_url=original_stream_url
             )
 
@@ -547,7 +535,6 @@ class RecordingManager:
             if recording and recording.get('file_path'):
                 file_path = recording['file_path']
                 rec_duration = int(time.time() - self.start_times.get(recording_id, time.time()))
-                # ✅ DVR: somma tutti i segmenti, non solo il primo file
                 file_size = self.db.get_total_size(recording_id)
                 self.db.update_recording_file_info(recording_id, rec_duration, file_size)
 
@@ -568,7 +555,7 @@ class RecordingManager:
             self.start_times.pop(recording_id, None)
 
     async def delete_recording(self, recording_id: str) -> bool:
-        """Delete a recording and ALL its segment files."""
+        """Delete a recording and its file."""
         if recording_id in self.processes:
             await self.stop_recording(recording_id)
 
@@ -576,20 +563,18 @@ class RecordingManager:
         if not recording:
             return False
 
-        # ✅ DVR: Elimina tutti i segmenti, non solo il file principale
-        segment_files = self.db.get_segment_files(recording_id)
-        for file_path in segment_files:
-            try:
-                os.remove(file_path)
-                logger.debug(f"Deleted segment: {file_path}")
-            except Exception as e:
-                logger.error(f"Error deleting segment {file_path}: {e}")
-
-        # Fallback: elimina anche il file_path diretto se non era nella lista
         direct_path = recording.get('file_path')
-        if direct_path and os.path.exists(direct_path) and direct_path not in segment_files:
+        if direct_path and os.path.exists(direct_path):
             try:
                 os.remove(direct_path)
+            except Exception as e:
+                logger.error(f"Error deleting file {direct_path}: {e}")
+
+        # Rimuove anche la playlist M3U8 nativa se esiste (vecchi file)
+        m3u8_path = os.path.join(self.recordings_dir, f"{recording_id}.m3u8")
+        if os.path.exists(m3u8_path):
+            try:
+                os.remove(m3u8_path)
             except Exception:
                 pass
 
@@ -670,16 +655,12 @@ class RecordingManager:
         return f"{timestamp}_{unique_suffix}"
 
     def _generate_filename(self, recording_id: str, name: str) -> str:
-        """Genera un pattern filename per la segmentazione FFmpeg.
-        Il pattern contiene %Y%m%d_%H%M%S che FFmpeg sostituisce con il timestamp
-        di ogni segmento grazie a -strftime 1.
-        Esempio: 20260505_120000_MySport_%Y%m%d_%H%M%S.ts
-        """
+        """Genera un filename univoco per la registrazione."""
         safe_name = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).strip()
         safe_name = safe_name.replace(' ', '_')[:50]
         if not safe_name:
             safe_name = "recording"
-        return f"{recording_id}_{safe_name}_%Y%m%d_%H%M%S.ts"
+        return f"{recording_id}_{safe_name}.ts"
 
     def _is_recording_active(self, recording: Dict[str, Any]) -> bool:
         """Check if a recording is actively running using DB-stored PID."""

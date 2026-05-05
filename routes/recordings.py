@@ -175,50 +175,26 @@ def setup_recording_routes(app, recording_manager):
         recording_id = request.match_info['id']
         recording = recording_manager.get_recording(recording_id)
 
-        if not recording:
-            return web.json_response({"error": "Recording not found"},
-                                    status=404)
-
-        segments = recording_manager.db.get_segment_files(recording_id)
-        if not segments:
+        if not recording or not recording.get('file_path'):
             return web.json_response({"error": "Recording file not found"},
                                     status=404)
 
-        # Determina l'estensione dal primo segmento
-        first_seg = segments[0]
-        ext = ".ts"
-        content_type = "video/MP2T"
-        if first_seg.endswith('.mp4'):
-            ext = ".mp4"
-            content_type = "video/mp4"
+        file_path = recording['file_path']
+        if not os.path.exists(file_path):
+            return web.json_response({"error": "Recording file not found on disk"},
+                                    status=404)
 
         safe_name = recording.get("name", "recording").replace(" ", "_")
-        filename = f"{safe_name}{ext}"
+        filename = f"{safe_name}.ts"
 
-        # Download concatena tutti i segmenti on-the-fly
-        response = web.StreamResponse(
-            status=200,
+        return web.FileResponse(
+            file_path,
             headers={
-                "Content-Type": content_type,
+                "Content-Type": "video/MP2T",
                 "Content-Disposition": f'attachment; filename="{filename}"',
                 "Access-Control-Allow-Origin": "*"
             }
         )
-        await response.prepare(request)
-        
-        for seg in segments:
-            try:
-                with open(seg, 'rb') as f:
-                    while True:
-                        chunk = f.read(65536)
-                        if not chunk:
-                            break
-                        await response.write(chunk)
-            except Exception as e:
-                logger.warning(f"Error reading segment {seg}: {e}")
-                
-        await response.write_eof()
-        return response
 
     async def handle_stream_recording(request):
         """GET /api/recordings/{id}/stream - Stream a recording file.
@@ -235,89 +211,57 @@ def setup_recording_routes(app, recording_manager):
         recording_id = request.match_info['id']
         recording = recording_manager.get_recording(recording_id)
 
-        if not recording:
+        if not recording or not recording.get('file_path'):
             return web.json_response({"error": "Recording not found"},
                                     status=404)
 
-        segments = recording_manager.db.get_segment_files(recording_id)
-        if not segments:
-            return web.json_response({"error": "Recording file not found"},
+        file_path = recording['file_path']
+        if not os.path.exists(file_path):
+            return web.json_response({"error": "Recording file not found on disk"},
                                     status=404)
 
         is_active = recording.get('is_active', False)
-        
-        # Usa il manifest generato nativamente da FFmpeg per avere durate ESATTE
-        db_file_path = recording.get('file_path', '')
-        # Calcola lo stesso m3u8_path che usa recording_manager._build_ffmpeg_command
-        m3u8_path = db_file_path.replace("%Y%m%d_%H%M%S", "playlist") + ".m3u8"
-        
-        if os.path.exists(m3u8_path):
-            import re
-            with open(m3u8_path, 'r') as f:
-                content = f.read()
-            
-            # Riscrive i path relativi (es. file_001.ts) nel path API assoluto
-            rewritten = re.sub(
-                r'^(?!#)(.*\.ts)$',
-                r'/api/recordings/' + recording_id + r'/segments/\1',
-                content,
-                flags=re.MULTILINE
-            )
-            return web.Response(
-                text=rewritten, 
-                content_type="application/vnd.apple.mpegurl",
-                headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache"}
-            )
-            
-        # Fallback per vecchie registrazioni senza .m3u8 nativo
-        m3u8 = [
-            "#EXTM3U",
-            "#EXT-X-VERSION:3",
-            f"#EXT-X-TARGETDURATION:{recording_manager.segment_seconds + 5}",
-            "#EXT-X-MEDIA-SEQUENCE:0"
-        ]
-        
-        if not is_active:
-            m3u8.append("#EXT-X-PLAYLIST-TYPE:VOD")
-            
-        for seg in segments:
-            filename = os.path.basename(seg)
-            m3u8.append(f"#EXTINF:{recording_manager.segment_seconds}.0,")
-            m3u8.append(f"/api/recordings/{recording_id}/segments/{filename}")
-            
-        if not is_active:
-            m3u8.append("#EXT-X-ENDLIST")
-            
-        return web.Response(
-            text="\n".join(m3u8), 
-            content_type="application/vnd.apple.mpegurl",
-            headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache"}
-        )
 
-    async def handle_serve_segment(request):
-        """GET /api/recordings/{id}/segments/{filename} - Serves an individual DVR segment."""
-        # if not check_password(request):
-        #     return web.json_response({"error": "Unauthorized"}, status=401)
-        
-        recording_id = request.match_info['id']
-        filename = request.match_info['filename']
-        
-        # Validate filename to prevent path traversal
-        if '/' in filename or '\\' in filename or '..' in filename:
-            return web.json_response({"error": "Invalid filename"}, status=400)
-            
-        file_path = os.path.join(recording_manager.recordings_dir, filename)
-        
-        if not os.path.exists(file_path):
-            return web.json_response({"error": "Segment not found"}, status=404)
-            
-        return web.FileResponse(
-            file_path,
+        if not is_active:
+            # File completo, web.FileResponse supporta Byte-Range requests in automatico (Seek perfetto)
+            return web.FileResponse(
+                file_path,
+                headers={
+                    "Content-Type": "video/MP2T",
+                    "Access-Control-Allow-Origin": "*"
+                }
+            )
+
+        # File in crescita (streaming attivo)
+        response = web.StreamResponse(
+            status=200,
             headers={
                 "Content-Type": "video/MP2T",
-                "Access-Control-Allow-Origin": "*"
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "no-cache"
             }
         )
+        await response.prepare(request)
+
+        # Manda il contenuto del file in streaming man mano che cresce
+        try:
+            with open(file_path, 'rb') as f:
+                while True:
+                    chunk = f.read(65536)
+                    if chunk:
+                        await response.write(chunk)
+                        await asyncio.sleep(0.01)  # small yield
+                    else:
+                        # Se è finito il chunk ma la rec è attiva, aspetta ffmpeg
+                        recording = recording_manager.get_recording(recording_id)
+                        if not recording or not recording.get('is_active', False):
+                            break
+                        await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.warning(f"Stream aborted: {e}")
+
+        await response.write_eof()
+        return response
 
     async def handle_active_recordings(request):
         """GET /api/recordings/active - Get only active recordings."""
@@ -475,8 +419,8 @@ def setup_recording_routes(app, recording_manager):
             recording = recording_manager.get_recording(recording_id)
 
         # Check if file exists and has content
-        segments = recording_manager.db.get_segment_files(recording_id)
-        if not segments:
+        file_path = recording.get('file_path')
+        if not file_path or not os.path.exists(file_path):
             return web.json_response({"error": "Recording file not available yet"}, status=404)
 
         # Redirect to the stream endpoint (absolute URL for Stremio)
@@ -505,7 +449,6 @@ def setup_recording_routes(app, recording_manager):
     app.router.add_get('/api/recordings/{id}/delete', handle_delete_recording_get)
     app.router.add_get('/api/recordings/{id}/download', handle_download_recording)
     app.router.add_get('/api/recordings/{id}/stream', handle_stream_recording)
-    app.router.add_get('/api/recordings/{id}/segments/{filename}', handle_serve_segment)
     # ✅ DVR Config API
     app.router.add_get('/api/dvr/config', handle_get_dvr_config)
     app.router.add_post('/api/dvr/config', handle_set_dvr_config)
