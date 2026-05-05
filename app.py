@@ -195,6 +195,8 @@ def create_app():
     async def on_startup(app):
         asyncio.create_task(ffmpeg_manager.cleanup_loop())
         asyncio.create_task(proxy.start_tasks())
+        # ✅ OPT: Pre-inizializza le sessioni HTTP per eliminare il cold-start sulla prima richiesta
+        asyncio.create_task(proxy._warmup_sessions())
         if DVR_ENABLED:
             asyncio.create_task(recording_manager.cleanup_loop())
     app.on_startup.append(on_startup)
@@ -231,7 +233,13 @@ def main():
     web.run_app(
         app, # Usa l'istanza aiohttp originale per il runner integrato
         host='0.0.0.0',
-        port=PORT
+        port=PORT,
+        # ✅ OPT: backlog più alto = più connessioni TCP in coda prima di rifiutarle (default 128)
+        backlog=256,
+        # ✅ OPT: keepalive verso i client allineato ai browser moderni (default varia per versione aiohttp)
+        keepalive_timeout=75,
+        # ✅ OPT: Shutdown veloce per restart rapidi in caso di aggiornamento
+        shutdown_timeout=10,
     )
 
 if __name__ == '__main__':

@@ -286,6 +286,32 @@ def setup_recording_routes(app, recording_manager):
         recordings = recording_manager.get_active_recordings()
         return web.json_response({"recordings": recordings})
 
+    async def handle_get_dvr_config(request):
+        """GET /api/dvr/config - Legge la configurazione DVR corrente."""
+        if not check_password(request):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+        return web.json_response({
+            "auto_record": recording_manager.auto_record,
+            "segment_minutes": recording_manager.segment_seconds // 60,
+        })
+
+    async def handle_set_dvr_config(request):
+        """POST /api/dvr/config - Aggiorna la configurazione DVR.
+        Body JSON: { "auto_record": true/false }
+        """
+        if not check_password(request):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+        if 'auto_record' in data:
+            recording_manager.auto_record = bool(data['auto_record'])
+        return web.json_response({
+            "auto_record": recording_manager.auto_record,
+            "segment_minutes": recording_manager.segment_seconds // 60,
+        })
+
     async def handle_record_via_get(request):
         """GET /record - Start recording and return a playable stream.
 
@@ -420,8 +446,8 @@ def setup_recording_routes(app, recording_manager):
 
     # Register routes
     app.router.add_get('/recordings', handle_recordings_page)
-    app.router.add_get('/record', handle_record_via_get)  # GET endpoint for StreamVix
-    app.router.add_get('/record/stop/{id}', handle_stop_and_stream)  # Stop recording and stream
+    app.router.add_get('/record', handle_record_via_get)
+    app.router.add_get('/record/stop/{id}', handle_stop_and_stream)
     app.router.add_get('/api/recordings', handle_list_recordings)
     app.router.add_get('/api/recordings/active', handle_active_recordings)
     app.router.add_post('/api/recordings/start', handle_start_recording)
@@ -432,5 +458,8 @@ def setup_recording_routes(app, recording_manager):
     app.router.add_get('/api/recordings/{id}/delete', handle_delete_recording_get)
     app.router.add_get('/api/recordings/{id}/download', handle_download_recording)
     app.router.add_get('/api/recordings/{id}/stream', handle_stream_recording)
+    # ✅ DVR Config API
+    app.router.add_get('/api/dvr/config', handle_get_dvr_config)
+    app.router.add_post('/api/dvr/config', handle_set_dvr_config)
 
     logger.debug("Recording routes registered")

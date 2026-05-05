@@ -51,6 +51,22 @@ class RecordingDB:
                 )
             """)
 
+            # ✅ DVR: Migration sicura — aggiunge segment_pattern se non esiste già
+            try:
+                cursor.execute("""
+                    ALTER TABLE recordings ADD COLUMN segment_pattern TEXT
+                """)
+            except Exception:
+                pass  # Colonna già esiste, ignorare
+
+            # ✅ DVR: Tabella di configurazione persistente (auto_record toggle, ecc.)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS dvr_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
+
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_recordings_status
                 ON recordings(status)
@@ -93,15 +109,16 @@ class RecordingDB:
             return False
 
     def update_to_recording(self, recording_id: str, file_path: str,
-                            headers: str = None, pid: int = None) -> bool:
+                            headers: str = None, pid: int = None,
+                            segment_pattern: str = None) -> bool:
         """Update a 'starting' entry to 'recording' after extraction succeeds."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE recordings
-                SET status = 'recording', file_path = ?, headers = ?, pid = ?
+                SET status = 'recording', file_path = ?, headers = ?, pid = ?, segment_pattern = ?
                 WHERE id = ? AND status = 'starting'
-            """, (file_path, headers, pid, recording_id))
+            """, (file_path, headers, pid, segment_pattern, recording_id))
             return cursor.rowcount > 0
 
     def get_recording(self, recording_id: str) -> Optional[Dict[str, Any]]:
@@ -210,3 +227,51 @@ class RecordingDB:
             return True
         except OSError:
             return False
+
+    # =========================================================================
+    # Segment Files Helpers
+    # =========================================================================
+
+    def get_segment_files(self, recording_id: str) -> List[str]:
+        """Restituisce la lista dei file segmento per una registrazione.
+        Usa il segment_pattern salvato nel DB per trovare tutti i file tramite glob.
+        """
+        import glob
+        recording = self.get_recording(recording_id)
+        if not recording:
+            return []
+        pattern = recording.get('segment_pattern')
+        if pattern:
+            files = sorted(glob.glob(pattern))
+            if files:
+                return files
+        # Fallback: file singolo (vecchio formato)
+        fp = recording.get('file_path')
+        if fp and os.path.exists(fp):
+            return [fp]
+        return []
+
+    def get_total_size(self, recording_id: str) -> int:
+        """Calcola la dimensione totale di tutti i segmenti in bytes."""
+        return sum(os.path.getsize(f) for f in self.get_segment_files(recording_id) if os.path.exists(f))
+
+    # =========================================================================
+    # DVR Config (auto_record toggle persistente)
+    # =========================================================================
+
+    def get_dvr_config(self, key: str, default: str = None) -> Optional[str]:
+        """Legge un valore di configurazione DVR dal DB."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM dvr_config WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row['value'] if row else default
+
+    def set_dvr_config(self, key: str, value: str) -> None:
+        """Salva un valore di configurazione DVR nel DB (upsert)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO dvr_config (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """, (key, value))

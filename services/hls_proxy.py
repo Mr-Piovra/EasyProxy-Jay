@@ -341,6 +341,28 @@ try:
 except ImportError:
     logger.warning("⚠️ DeltabitExtractor module not found.")
 
+# ==============================================================================
+# Auto-DVR Helper
+# ==============================================================================
+async def _auto_record_live_stream(stream_url: str, recording_manager):
+    """Avvia auto-recording se non c'è già una registrazione attiva per questo URL.
+    La dedup è garantita a livello DB dall'unique index.
+    """
+    try:
+        existing = recording_manager.get_pending_recording_by_url(stream_url)
+        if existing:
+            return  # Già in registrazione, skip
+        
+        # Genera nome dal dominio
+        from urllib.parse import urlparse
+        import datetime
+        parsed = urlparse(stream_url)
+        name = f"{parsed.netloc or 'live'} - {datetime.datetime.now().strftime('%d/%m %H:%M')}"
+        
+        logger.info(f"🔴 Auto-DVR: avvio registrazione automatica per {stream_url[:60]}...")
+        await recording_manager.start_recording(url=stream_url, name=name)
+    except Exception as e:
+        logger.warning(f"⚠️ Auto-DVR: errore nell'avvio della registrazione: {e}")
 
 class HLSProxy:
     """Proxy HLS per gestire stream Vavoo, DLHD, HLS generici e playlist builder con supporto AES-128"""
@@ -369,6 +391,11 @@ class HLSProxy:
         # Sessione condivisa per il proxy (no proxy)
         self.session = None
         self.flex_session = None
+
+        # ✅ OPT: Manifest cache in-memory per ridurre fetch upstream ripetuti dal player
+        # Distinta da captured_hls_manifest_map (quella è per manifesti catturati dagli estrattori)
+        # Questa opera su manifesti raw fetchati in _proxy_stream
+        self.manifest_cache = {}   # cache_key -> (rewritten_text, expires_at)
 
         # Registry for HLS URL shortening (to handle extremely long multi-path URLs)
         # url_id -> (actual_url, timestamp, ttl)
@@ -493,6 +520,8 @@ class HLSProxy:
         asyncio.create_task(self._update_latest_version())
         # Always start WARP check (universal trace method)
         asyncio.create_task(self._update_warp_status_loop())
+        # ✅ OPT: Pulizia periodica sessioni proxy chiuse (previene memory leak su sessioni 24/7)
+        asyncio.create_task(self._cleanup_proxy_sessions_loop())
 
     async def _update_warp_status_loop(self):
         """Periodically checks WARP status via Cloudflare trace (Universal)."""
@@ -513,6 +542,29 @@ class HLSProxy:
                 self.warp_status = "Disconnected"
             
             await asyncio.sleep(60) # Check every minute
+
+    async def _warmup_sessions(self):
+        """✅ OPT: Pre-inizializza le sessioni HTTP al boot per eliminare il cold-start.
+        _get_session() è idempotente: crea solo se None o chiusa.
+        """
+        try:
+            await self._get_session()                            # sessione diretta IPv4
+            await self._get_session(prefer_default_family=True)  # flex session (dual-stack)
+            logger.info("✅ HTTP sessions warmed up")
+        except Exception as e:
+            logger.warning(f"⚠️ Session warm-up failed (non-critical): {e}")
+
+    async def _cleanup_proxy_sessions_loop(self):
+        """✅ OPT: Rimuove periodicamente le sessioni proxy chiuse per prevenire memory leak.
+        Eseguito ogni 5 minuti. Sicuro: usa list() per evitare modifiche al dict durante l'iterazione.
+        """
+        while True:
+            await asyncio.sleep(300)  # ogni 5 minuti
+            closed_keys = [k for k, s in list(self.proxy_sessions.items()) if s.closed]
+            for k in closed_keys:
+                self.proxy_sessions.pop(k, None)
+            if closed_keys:
+                logger.debug(f"🧹 Cleaned up {len(closed_keys)} closed proxy sessions")
 
     async def _update_latest_version(self):
         """Periodically checks GitHub for the latest version in the background."""
@@ -660,8 +712,10 @@ class HLSProxy:
             connector_kwargs = {
                 "limit": 0,
                 "limit_per_host": 0,
-                "keepalive_timeout": 60,
+                "keepalive_timeout": 75,        # ✅ OPT: era 60, allineato al keepalive server
                 "enable_cleanup_closed": True,
+                "use_dns_cache": True,           # ✅ OPT: cache DNS locale, evita re-resolve via VPN
+                "ttl_dns_cache": 300,            # ✅ OPT: 5 minuti di cache DNS
             }
             if not prefer_default_family:
                 connector_kwargs["family"] = socket.AF_INET
@@ -765,7 +819,10 @@ class HLSProxy:
                     family=socket.AF_INET,  # Force IPv4
                     rdns=rdns,
                 )
-                timeout = ClientTimeout(total=None, connect=30, sock_connect=30, sock_read=None)
+                # ✅ OPT: sock_read=45s SOLO sulle proxy sessions di fetch discreti.
+                # NON applicare a self.session che usa StreamResponse+iter_any() per streaming continuo
+                # (un timeout fisso interromperebbe lo stream mentre il player lo sta guardando).
+                timeout = ClientTimeout(total=None, connect=15, sock_connect=15, sock_read=45)
                 session = ClientSession(timeout=timeout, connector=connector)
                 self.proxy_sessions[proxy] = session  # Cache the session
                 return session, proxy  # Return proxy URL for logging
@@ -3237,7 +3294,37 @@ class HLSProxy:
                     request_target = urllib.parse.unquote(stream_url)
                 else:
                     request_target = yarl.URL(stream_url, encoded=True)
-                resp_ctx = session.get(request_target, headers=headers, ssl=not disable_ssl)
+
+                # ✅ OPT: Cache manifest in-memory con TTL 2s.
+                # I player HLS ri-richiedono il manifest ogni 1-3s: la cache evita fetch upstream ridondanti.
+                # Sicura: opera SOLO su stream non-cccdn e non-curl_cffi (percorso non già gestito).
+                _manifest_cache_key = hashlib.md5(str(request_target).encode()).hexdigest()[:12]
+                _now = time.time()
+                _cached_manifest = self.manifest_cache.get(_manifest_cache_key)
+                if _cached_manifest and _now < _cached_manifest[1]:
+                    logger.debug(f"⚡ Manifest served from cache: {_manifest_cache_key}")
+                    return web.Response(text=_cached_manifest[0], headers={
+                        "Content-Type": "application/vnd.apple.mpegurl",
+                        "Access-Control-Allow-Origin": "*",
+                        "Cache-Control": "no-cache",
+                    })
+
+                # ✅ OPT: Retry una volta (0.5s) prima di aprire il context manager TCP.
+                # Il retry va fatto QUI, non dentro iter_any() che è un generator già aperto su TCP.
+                # Cattura solo errori di connessione transitori (timeout, reset), non errori HTTP.
+                resp_ctx = None
+                for _attempt in range(2):
+                    try:
+                        resp_ctx = session.get(request_target, headers=headers, ssl=not disable_ssl)
+                        break
+                    except (asyncio.TimeoutError, aiohttp.ClientConnectionError, OSError) as _conn_err:
+                        if _attempt == 0:
+                            logger.debug(f"⚠️ Connection error on first attempt, retrying in 0.5s: {_conn_err}")
+                            await asyncio.sleep(0.5)
+                        else:
+                            raise
+                if resp_ctx is None:
+                    resp_ctx = session.get(request_target, headers=headers, ssl=not disable_ssl)
 
             async with resp_ctx as resp:
                 content_type = resp.headers.get("content-type", "").lower()
@@ -3361,6 +3448,31 @@ class HLSProxy:
                         disable_ssl=disable_ssl,
                         selected_proxy=forced_proxy, # ✅ PASSA IL PROXY FORZATO
                     )
+                    # ✅ OPT: Salva in cache con TTL 2s. Solo per manifest HLS (non MPD, non segmenti).
+                    # Pulizia lazy: rimuoviamo entry scadute ogni volta che ne aggiungiamo una nuova.
+                    if not goto_manifest_processing and not is_cccdn_stream:
+                        _expire_at = time.time() + 2.0
+                        self.manifest_cache[_manifest_cache_key] = (rewritten, _expire_at)
+                        # Pulizia lazy delle entry scadute (evita crescita illimitata)
+                        _stale = [k for k, v in list(self.manifest_cache.items()) if time.time() > v[1]]
+                        for k in _stale:
+                            self.manifest_cache.pop(k, None)
+
+                    # ✅ Auto-DVR: avvia registrazione in background SE auto_record è ON e il manifest è live
+                    # Condizioni di sicurezza:
+                    #   1. Solo endpoint manifest principali (non sub-richieste interne del proxy)
+                    #   2. Solo manifest live (#EXT-X-ENDLIST assente = stream continuo)
+                    #   3. Solo se recording_manager è disponibile (DVR_ENABLED=true)
+                    #   4. Solo se auto_record è attivato dall'utente via UI
+                    _rm = request.app.get('recording_manager')
+                    if (_rm is not None
+                            and request.path in ('/proxy/hls/manifest.m3u8', '/proxy/manifest.m3u8')
+                            and '#EXT-X-ENDLIST' not in manifest_content
+                            and _rm.auto_record):
+                        asyncio.create_task(
+                            _auto_record_live_stream(stream_url, _rm)
+                        )
+
                     return web.Response(text=rewritten, headers={
                         "Content-Type": "application/vnd.apple.mpegurl",
                         "Access-Control-Allow-Origin": "*",

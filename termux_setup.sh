@@ -27,7 +27,7 @@ info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 
 DISTRO_NAME="ubuntu"
 EP_DIR="/root/EasyProxy"
-EP_REPO="https://github.com/realbestia1/EasyProxy.git"
+EP_REPO="https://github.com/Mr-Piovra/EasyProxy-Jay.git"
 
 echo ""
 echo -e "${BLUE}==========================================${NC}"
@@ -78,7 +78,7 @@ proot-distro login "$DISTRO_NAME" -- bash -c '
     fi
 
     EP_DIR="/root/EasyProxy"
-    EP_REPO="https://github.com/realbestia1/EasyProxy.git"
+    EP_REPO="https://github.com/Mr-Piovra/EasyProxy-Jay.git"
 
     if [ -d "$EP_DIR/.git" ]; then
         echo "[WARN] EasyProxy already exists, pulling latest..."
@@ -141,6 +141,9 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 export PIP_BREAK_SYSTEM_PACKAGES=1
 export PORT=7860
 export ENABLE_WARP=false
+# ✅ OPT: Riduce I/O su filesystem proot (no .pyc su sdcard) e migliora logging real-time
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONUNBUFFERED=1
 LOG_DIR="/root/.easyproxy"
 LOG_FILE="$LOG_DIR/easyproxy.log"
 
@@ -197,7 +200,20 @@ echo "Starting FlareSolverr (Headless)..."
 cd /root/EasyProxy/flaresolverr && PORT=8191 python3 src/flaresolverr.py &
 FLARE_PID=$!
 
-sleep 2
+# ✅ OPT: Attesa intelligente — invece di sleep 2 cieco, aspetta che /health risponda OK (max 30s)
+echo "Waiting for FlareSolverr to be ready..."
+_flare_ready=0
+for _i in $(seq 1 30); do
+    if curl -sf http://localhost:8191/health > /dev/null 2>&1; then
+        echo "[OK] FlareSolverr ready after ${_i}s"
+        _flare_ready=1
+        break
+    fi
+    sleep 1
+done
+if [ "$_flare_ready" -eq 0 ]; then
+    echo "[WARN] FlareSolverr did not respond in 30s — starting EasyProxy anyway"
+fi
 
 echo "Starting EasyProxy on port $PORT..."
 cd /root/EasyProxy

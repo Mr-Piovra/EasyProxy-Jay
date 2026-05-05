@@ -1,4 +1,5 @@
 import asyncio
+import glob
 import uuid
 import logging
 import os
@@ -13,7 +14,7 @@ from urllib.parse import urlencode
 import aiohttp
 
 from services.recording_db import RecordingDB
-from config import PORT, API_PASSWORD
+from config import PORT, API_PASSWORD, DVR_SEGMENT_MINUTES, DVR_AUTO_RECORD
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,8 @@ class RecordingManager:
         self.db = RecordingDB(recordings_dir)
         self.processes: Dict[str, asyncio.subprocess.Process] = {}
         self.start_times: Dict[str, float] = {}
+        # Ogni segmento dura DVR_SEGMENT_MINUTES minuti (default 10 = ~600MB)
+        self.segment_seconds = DVR_SEGMENT_MINUTES * 60
 
         if not os.path.exists(self.recordings_dir):
             os.makedirs(self.recordings_dir)
@@ -232,9 +235,8 @@ class RecordingManager:
     ) -> List[str]:
         """
         Build FFmpeg command for recording based on stream configuration.
-
-        This is the unified command builder that handles all stream types.
-        Stream-specific options are determined by the StreamConfig.
+        Output è un pattern strftime per la segmentazione automatica:
+          output_path deve contenere %Y%m%d_%H%M%S per funzionare con -f segment.
         """
         cmd = [
             "ffmpeg",
@@ -273,7 +275,7 @@ class RecordingManager:
         if '.m3u8' in config.video_url.lower():
             cmd.extend(["-live_start_index", "-1"])
 
-        # Duration limit
+        # Duration limit totale (copre tutti i segmenti)
         if duration:
             cmd.extend(["-t", str(duration)])
 
@@ -289,16 +291,22 @@ class RecordingManager:
 
         # Stream mapping
         if config.audio_url:
-            # Dual-input: video from input 0, audio from input 1
             cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
             logger.debug("Using dual-input mode: video + separate audio")
         else:
-            # Single input: video and optional audio from same input
             cmd.extend(["-map", "0:v:0", "-map", "0:a:0?"])
 
-        # Copy streams without re-encoding, output to MPEG-TS
+        # ✅ DVR: Segmentazione automatica via -f segment
+        # Output è un pattern strftime es. /recordings/20260505_140000.ts
         cmd.extend(["-c", "copy"])
-        cmd.append(output_path)
+        cmd.extend([
+            "-f", "segment",
+            "-segment_time", str(self.segment_seconds),
+            "-segment_format", "mpegts",
+            "-strftime", "1",
+            "-reset_timestamps", "1",
+            output_path,  # deve contenere %Y%m%d_%H%M%S
+        ])
 
         return cmd
 
@@ -337,8 +345,14 @@ class RecordingManager:
             logger.info(f"Recording already exists for URL: {url[:80]}...")
             return None
 
-        filename = self._generate_filename(recording_id, name)
-        file_path = os.path.join(self.recordings_dir, filename)
+        filename_pattern = self._generate_filename(recording_id, name)
+        # Il pattern contiene %Y%m%d_%H%M%S per ffmpeg -f segment -strftime
+        file_path = os.path.join(self.recordings_dir, filename_pattern)
+        # glob_pattern per trovare tutti i segmenti generati
+        glob_pattern = os.path.join(
+            self.recordings_dir,
+            filename_pattern.replace("%Y%m%d_%H%M%S", "*")
+        )
 
         # Apply duration limits
         if duration:
@@ -368,9 +382,10 @@ class RecordingManager:
 
             self.db.update_to_recording(
                 recording_id=recording_id,
-                file_path=file_path,
+                file_path=file_path,          # primo segmento (o path base)
                 headers=None,
-                pid=process.pid
+                pid=process.pid,
+                segment_pattern=glob_pattern   # pattern per trovare tutti i segmenti
             )
 
             asyncio.create_task(self._monitor_recording(recording_id, process))
@@ -478,10 +493,10 @@ class RecordingManager:
             recording = self.db.get_recording(recording_id)
             if recording and recording.get('file_path'):
                 file_path = recording['file_path']
-                if os.path.exists(file_path):
-                    rec_duration = int(time.time() - self.start_times.get(recording_id, time.time()))
-                    file_size = os.path.getsize(file_path)
-                    self.db.update_recording_file_info(recording_id, rec_duration, file_size)
+                rec_duration = int(time.time() - self.start_times.get(recording_id, time.time()))
+                # ✅ DVR: somma tutti i segmenti, non solo il primo file
+                file_size = self.db.get_total_size(recording_id)
+                self.db.update_recording_file_info(recording_id, rec_duration, file_size)
 
         except asyncio.CancelledError:
             pass
@@ -492,7 +507,7 @@ class RecordingManager:
             self.start_times.pop(recording_id, None)
 
     async def delete_recording(self, recording_id: str) -> bool:
-        """Delete a recording and its file."""
+        """Delete a recording and ALL its segment files."""
         if recording_id in self.processes:
             await self.stop_recording(recording_id)
 
@@ -500,12 +515,22 @@ class RecordingManager:
         if not recording:
             return False
 
-        if recording.get('file_path') and os.path.exists(recording['file_path']):
+        # ✅ DVR: Elimina tutti i segmenti, non solo il file principale
+        segment_files = self.db.get_segment_files(recording_id)
+        for file_path in segment_files:
             try:
-                os.remove(recording['file_path'])
-                logger.debug(f"Deleted recording file: {recording['file_path']}")
+                os.remove(file_path)
+                logger.debug(f"Deleted segment: {file_path}")
             except Exception as e:
-                logger.error(f"Error deleting file: {e}")
+                logger.error(f"Error deleting segment {file_path}: {e}")
+
+        # Fallback: elimina anche il file_path diretto se non era nella lista
+        direct_path = recording.get('file_path')
+        if direct_path and os.path.exists(direct_path) and direct_path not in segment_files:
+            try:
+                os.remove(direct_path)
+            except Exception:
+                pass
 
         return self.db.delete_recording(recording_id)
 
@@ -584,12 +609,16 @@ class RecordingManager:
         return f"{timestamp}_{unique_suffix}"
 
     def _generate_filename(self, recording_id: str, name: str) -> str:
-        """Generate a safe filename for the recording (MPEG-TS format)."""
+        """Genera un pattern filename per la segmentazione FFmpeg.
+        Il pattern contiene %Y%m%d_%H%M%S che FFmpeg sostituisce con il timestamp
+        di ogni segmento grazie a -strftime 1.
+        Esempio: 20260505_120000_MySport_%Y%m%d_%H%M%S.ts
+        """
         safe_name = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).strip()
         safe_name = safe_name.replace(' ', '_')[:50]
         if not safe_name:
             safe_name = "recording"
-        return f"{recording_id}_{safe_name}.ts"
+        return f"{recording_id}_{safe_name}_%Y%m%d_%H%M%S.ts"
 
     def _is_recording_active(self, recording: Dict[str, Any]) -> bool:
         """Check if a recording is actively running using DB-stored PID."""
@@ -620,8 +649,34 @@ class RecordingManager:
             return 0
 
     def _enrich_recording(self, recording: Dict[str, Any]) -> Dict[str, Any]:
-        """Add computed fields (is_active, elapsed_seconds) to a recording."""
+        """Add computed fields (is_active, elapsed_seconds, file_size_bytes) to a recording."""
         recording['is_active'] = self._is_recording_active(recording)
         if recording['is_active'] and recording.get('started_at'):
             recording['elapsed_seconds'] = self._calculate_elapsed(recording['started_at'])
+        # ✅ DVR: Aggiorna file_size con la somma di tutti i segmenti in tempo reale
+        total_size = self.db.get_total_size(recording['id'])
+        if total_size > 0:
+            recording['file_size_bytes'] = total_size
         return recording
+
+    # =========================================================================
+    # Auto-Record Toggle
+    # =========================================================================
+
+    @property
+    def auto_record(self) -> bool:
+        """Legge lo stato auto-record dal DB (persistente tra i restart).
+        Fallback al valore di configurazione iniziale DVR_AUTO_RECORD.
+        """
+        val = self.db.get_dvr_config('auto_record')
+        if val is None:
+            return DVR_AUTO_RECORD  # valore dal .env / default False
+        return val == 'true'
+
+    @auto_record.setter
+    def auto_record(self, enabled: bool) -> None:
+        """Persiste lo stato auto-record nel DB."""
+        self.db.set_dvr_config('auto_record', 'true' if enabled else 'false')
+        icon = '🔴' if enabled else '⏹️'
+        state = 'abilitato' if enabled else 'disabilitato'
+        logger.info(f"{icon} Auto-DVR {state}")
