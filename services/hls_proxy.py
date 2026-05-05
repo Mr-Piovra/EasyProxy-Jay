@@ -350,21 +350,33 @@ async def _auto_record_live_stream(stream_url: str, proxy_url: str, recording_ma
     evitando la creazione di micro-file causati da piccoli sbalzi di connessione del player.
     """
     try:
-        # Pulisce manual_stops scaduti in base al timeout configurato
-        now = time.time()
-        timeout_seconds = recording_manager.auto_record_timeout * 60
-        for k, v in list(recording_manager.manual_stops.items()):
-            if now - v > timeout_seconds:
-                del recording_manager.manual_stops[k]
-                
         import urllib.parse
         import os
+
+        # Pulisce manual_stops scaduti.
+        # TTL fisso: massimo tra 10 minuti e il timeout configurato.
+        # Questo assicura che uno stop manuale venga rispettato almeno 10 minuti
+        # indipendentemente dal valore del timeout di inattività.
+        now = time.time()
+        manual_stop_ttl = max(600, recording_manager.auto_record_timeout * 60)  # min 10 min
+        for k, v in list(recording_manager.manual_stops.items()):
+            if now - v > manual_stop_ttl:
+                del recording_manager.manual_stops[k]
+
         parsed_stream = urllib.parse.urlparse(stream_url)
         base_path = f"{parsed_stream.scheme}://{parsed_stream.netloc}{os.path.dirname(parsed_stream.path)}"
-        
+        stream_netloc = parsed_stream.netloc  # usato per dedup netloc-level
+
         # Helper: controlla se due path appartengono alla stessa sessione
         def is_same_session(path1: str, path2: str) -> bool:
             return path1.startswith(path2) or path2.startswith(path1)
+
+        # Helper: controlla se un URL bloccato riguarda lo stesso host
+        def is_same_host(blocked_url: str) -> bool:
+            try:
+                return urllib.parse.urlparse(blocked_url).netloc == stream_netloc
+            except Exception:
+                return False
 
         # Inizializza il set dei pending se non esiste
         if not hasattr(recording_manager, '_pending_auto_records'):
@@ -375,22 +387,24 @@ async def _auto_record_live_stream(stream_url: str, proxy_url: str, recording_ma
             if is_same_session(base_path, pending_base):
                 return
 
-        # Check se fermato a mano recentemente e l'utente lo sta ancora guardando
+        # Check se fermato a mano recentemente (per path, base_path o netloc)
         if stream_url in recording_manager.manual_stops:
             return
-        for stop_path in recording_manager.manual_stops.keys():
-            if stop_path.startswith('http') and is_same_session(base_path, stop_path):
+        for stop_path in list(recording_manager.manual_stops.keys()):
+            if stop_path.startswith('http') and (
+                is_same_session(base_path, stop_path) or is_same_host(stop_path)
+            ):
                 return
-                
+
         # Registra il path come "in attesa"
         recording_manager._pending_auto_records.add(base_path)
-        
+
         # Ritardo strategico di 8 secondi:
-        # Permette al player (es. VLC/Stremio) di avere a disposizione il 100% della 
+        # Permette al player (es. VLC/Stremio) di avere a disposizione il 100% della
         # banda di rete per scaricare i primissimi segmenti e costruirsi il "polmone" (buffer).
         # Senza questo delay, FFmpeg e il player si ruberebbero la banda a vicenda nel momento critico.
         await asyncio.sleep(8)
-        
+
         # Rimuove il lock di pending
         recording_manager._pending_auto_records.discard(base_path)
 
@@ -407,14 +421,16 @@ async def _auto_record_live_stream(stream_url: str, proxy_url: str, recording_ma
                 orig_base = f"{parsed_orig.scheme}://{parsed_orig.netloc}{os.path.dirname(parsed_orig.path)}"
                 if is_same_session(base_path, orig_base):
                     return  # Stessa sessione di streaming, skip silenzioso
-        
+
         # Check di nuovo i manual stops nel caso in cui l'utente abbia chiuso durante i 8 secondi di delay
         if stream_url in recording_manager.manual_stops:
             return
-        for stop_path in recording_manager.manual_stops.keys():
-            if stop_path.startswith('http') and is_same_session(base_path, stop_path):
+        for stop_path in list(recording_manager.manual_stops.keys()):
+            if stop_path.startswith('http') and (
+                is_same_session(base_path, stop_path) or is_same_host(stop_path)
+            ):
                 return
-        
+
         # Genera nome dal dominio (estrattore url annidato se è localhost)
         from urllib.parse import urlparse, parse_qs
         import datetime
@@ -426,9 +442,9 @@ async def _auto_record_live_stream(stream_url: str, proxy_url: str, recording_ma
                 netloc = urlparse(qs['d'][0]).netloc
             elif 'url' in qs:
                 netloc = urlparse(qs['url'][0]).netloc
-                
+
         name = f"{netloc or 'live'} - {datetime.datetime.now().strftime('%d/%m %H:%M')}"
-        
+
         logger.info(f"🔴 Auto-DVR: avvio registrazione automatica per {stream_url[:60]}...")
         # ✅ Fornisce a FFmpeg il proxy_url interno (127.0.0.1) così sfrutta la cache e la stabilità del proxy!
         await recording_manager.start_recording(url=proxy_url, name=name, is_auto=True, original_stream_url=stream_url)
