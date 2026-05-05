@@ -51,30 +51,6 @@ class RecordingDB:
                 )
             """)
 
-            # ✅ DVR: Migration sicura — aggiunge segment_pattern se non esiste già
-            try:
-                cursor.execute("""
-                    ALTER TABLE recordings ADD COLUMN segment_pattern TEXT
-                """)
-            except Exception:
-                pass  # Colonna già esiste, ignorare
-                
-            # ✅ DVR: Migration sicura — aggiunge original_url se non esiste già
-            try:
-                cursor.execute("""
-                    ALTER TABLE recordings ADD COLUMN original_url TEXT
-                """)
-            except Exception:
-                pass  # Colonna già esiste, ignorare
-
-            # ✅ DVR: Tabella di configurazione persistente (auto_record toggle, ecc.)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS dvr_config (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                )
-            """)
-
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_recordings_status
                 ON recordings(status)
@@ -117,16 +93,15 @@ class RecordingDB:
             return False
 
     def update_to_recording(self, recording_id: str, file_path: str,
-                            headers: str = None, pid: int = None,
-                            segment_pattern: str = None, original_url: str = None) -> bool:
+                            headers: str = None, pid: int = None) -> bool:
         """Update a 'starting' entry to 'recording' after extraction succeeds."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE recordings
-                SET status = 'recording', file_path = ?, headers = ?, pid = ?, segment_pattern = ?, original_url = ?
+                SET status = 'recording', file_path = ?, headers = ?, pid = ?
                 WHERE id = ? AND status = 'starting'
-            """, (file_path, headers, pid, segment_pattern, original_url, recording_id))
+            """, (file_path, headers, pid, recording_id))
             return cursor.rowcount > 0
 
     def get_recording(self, recording_id: str) -> Optional[Dict[str, Any]]:
@@ -235,38 +210,3 @@ class RecordingDB:
             return True
         except OSError:
             return False
-
-    # =========================================================================
-    # File Size Helper
-    # =========================================================================
-
-    def get_total_size(self, recording_id: str) -> int:
-        """Calcola la dimensione del file della registrazione in bytes."""
-        recording = self.get_recording(recording_id)
-        if not recording:
-            return 0
-        fp = recording.get('file_path')
-        if fp and os.path.exists(fp):
-            return os.path.getsize(fp)
-        return 0
-
-    # =========================================================================
-    # DVR Config (auto_record toggle persistente)
-    # =========================================================================
-
-    def get_dvr_config(self, key: str, default: str = None) -> Optional[str]:
-        """Legge un valore di configurazione DVR dal DB."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT value FROM dvr_config WHERE key = ?", (key,))
-            row = cursor.fetchone()
-            return row['value'] if row else default
-
-    def set_dvr_config(self, key: str, value: str) -> None:
-        """Salva un valore di configurazione DVR nel DB (upsert)."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO dvr_config (key, value) VALUES (?, ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """, (key, value))

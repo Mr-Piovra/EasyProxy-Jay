@@ -1,5 +1,4 @@
 import asyncio
-import glob
 import uuid
 import logging
 import os
@@ -14,7 +13,7 @@ from urllib.parse import urlencode
 import aiohttp
 
 from services.recording_db import RecordingDB
-from config import PORT, API_PASSWORD, DVR_SEGMENT_MINUTES, DVR_AUTO_RECORD
+from config import PORT, API_PASSWORD
 
 logger = logging.getLogger(__name__)
 
@@ -53,24 +52,6 @@ class RecordingManager:
         self.db = RecordingDB(recordings_dir)
         self.processes: Dict[str, asyncio.subprocess.Process] = {}
         self.start_times: Dict[str, float] = {}
-        # Ogni segmento dura DVR_SEGMENT_MINUTES minuti (default 10 = ~600MB)
-        self.segment_seconds = DVR_SEGMENT_MINUTES * 60
-
-        # Stato per Auto-Record Timeout
-        self.last_accessed: Dict[str, float] = {}
-        self.auto_recordings = set()
-        self.manual_stops: Dict[str, float] = {}
-        self.original_stream_urls: Dict[str, str] = {}
-        
-        # Ripristina lo stato delle sessioni in memoria per le registrazioni attive dal DB
-        for rec in self.db.get_active_recordings():
-            # Tratta tutte le registrazioni attive in background come auto-record
-            # in modo che il timeout si applichi anche a loro
-            self.auto_recordings.add(rec['id'])
-            
-            orig = rec.get('original_url')
-            if orig:
-                self.original_stream_urls[rec['id']] = orig
 
         if not os.path.exists(self.recordings_dir):
             os.makedirs(self.recordings_dir)
@@ -251,8 +232,9 @@ class RecordingManager:
     ) -> List[str]:
         """
         Build FFmpeg command for recording based on stream configuration.
-        Output è un pattern strftime per la segmentazione automatica:
-          output_path deve contenere %Y%m%d_%H%M%S per funzionare con -f segment.
+
+        This is the unified command builder that handles all stream types.
+        Stream-specific options are determined by the StreamConfig.
         """
         cmd = [
             "ffmpeg",
@@ -291,7 +273,7 @@ class RecordingManager:
         if '.m3u8' in config.video_url.lower():
             cmd.extend(["-live_start_index", "-1"])
 
-        # Duration limit totale (copre tutti i segmenti)
+        # Duration limit
         if duration:
             cmd.extend(["-t", str(duration)])
 
@@ -307,20 +289,16 @@ class RecordingManager:
 
         # Stream mapping
         if config.audio_url:
+            # Dual-input: video from input 0, audio from input 1
             cmd.extend(["-map", "0:v:0", "-map", "1:a:0"])
             logger.debug("Using dual-input mode: video + separate audio")
         else:
+            # Single input: video and optional audio from same input
             cmd.extend(["-map", "0:v:0", "-map", "0:a:0?"])
 
-        # Output MP4 frammentato: l'indice è distribuito ad ogni keyframe
-        # → il file è seekable in VLC sia durante la registrazione che dopo
-        # → nessuna corruzione in caso di crash di FFmpeg (no moov atom finale)
+        # Copy streams without re-encoding, output to MPEG-TS
         cmd.extend(["-c", "copy"])
-        cmd.extend([
-            "-f", "mp4",
-            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-            output_path
-        ])
+        cmd.append(output_path)
 
         return cmd
 
@@ -333,9 +311,7 @@ class RecordingManager:
         url: str,
         name: Optional[str] = None,
         duration: Optional[int] = None,
-        clearkey: Optional[str] = None,
-        is_auto: bool = False,
-        original_stream_url: Optional[str] = None
+        clearkey: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Start recording a stream.
@@ -371,7 +347,7 @@ class RecordingManager:
             duration = self.max_duration
 
         # Prepare stream-specific configuration
-        config = await self._prepare_stream_config(url)
+        config = await self._prepare_stream_config(url, clearkey)
 
         # Build FFmpeg command
         cmd = self._build_ffmpeg_command(config, file_path, duration)
@@ -389,20 +365,12 @@ class RecordingManager:
 
             self.processes[recording_id] = process
             self.start_times[recording_id] = time.time()
-            
-            if is_auto:
-                self.auto_recordings.add(recording_id)
-                self.last_accessed[recording_id] = time.time()
-                if original_stream_url:
-                    self.original_stream_urls[recording_id] = original_stream_url
 
             self.db.update_to_recording(
                 recording_id=recording_id,
                 file_path=file_path,
                 headers=None,
-                pid=process.pid,
-                segment_pattern=None,
-                original_url=original_stream_url
+                pid=process.pid
             )
 
             asyncio.create_task(self._monitor_recording(recording_id, process))
@@ -414,87 +382,47 @@ class RecordingManager:
             self.db.update_recording_status(recording_id, 'failed', str(e))
             return None
 
-    async def stop_recording(self, recording_id: str, manual_stop: bool = True) -> bool:
+    async def stop_recording(self, recording_id: str) -> bool:
         """
         Stop an active recording.
 
         Supports multi-worker: if process not in local dict, use PID from DB.
         """
-        # Se lo sto fermando a mano, aggiungilo in blacklist temporanea
-        if manual_stop:
-            rec = self.db.get_recording(recording_id)
-            if rec:
-                import urllib.parse
-                
-                # Blacklist della sessione (base_path) invece dell'URL esatto
-                orig_url = self.original_stream_urls.get(recording_id)
-                if orig_url:
-                    self.manual_stops[orig_url] = time.time()
-                    parsed_orig = urllib.parse.urlparse(orig_url)
-                    base_path = f"{parsed_orig.scheme}://{parsed_orig.netloc}{os.path.dirname(parsed_orig.path)}"
-                    self.manual_stops[base_path] = time.time()
-                    
-                self.manual_stops[rec['url']] = time.time()
-                
-                # Aggiunge anche l'URL upstream estratto dal proxy_url se presente (fallback)
-                parsed = urllib.parse.urlparse(rec['url'])
-                qs = urllib.parse.parse_qs(parsed.query)
-                if 'd' in qs:
-                    d_url = qs['d'][0]
-                    self.manual_stops[d_url] = time.time()
-                    parsed_d = urllib.parse.urlparse(d_url)
-                    d_base_path = f"{parsed_d.scheme}://{parsed_d.netloc}{os.path.dirname(parsed_d.path)}"
-                    self.manual_stops[d_base_path] = time.time()
-
         recording = self.db.get_recording(recording_id)
         if not recording:
             logger.warning(f"Recording {recording_id} not found in database")
             return False
 
-        # Rimuove subito il processo dal dizionario per segnalare al monitor
-        # che lo stop è stato richiesto esplicitamente (evita race condition)
-        process = self.processes.pop(recording_id, None)
-        self.start_times.pop(recording_id, None)
-
-        if process is not None:
+        if recording_id in self.processes:
+            process = self.processes[recording_id]
             try:
-                # Invia 'q' a FFmpeg per uno shutdown graceful
-                if process.stdin and not process.stdin.is_closing():
-                    try:
-                        process.stdin.write(b'q')
-                        await process.stdin.drain()
-                    except Exception:
-                        pass
-                    try:
-                        process.stdin.close()
-                    except Exception:
-                        pass
+                # Send 'q' to FFmpeg for graceful shutdown
+                if process.stdin:
+                    process.stdin.write(b'q')
+                    await process.stdin.drain()
+                    process.stdin.close()
 
-                # Aspetta terminazione graceful
                 try:
                     await asyncio.wait_for(process.wait(), timeout=10.0)
                 except asyncio.TimeoutError:
                     logger.warning(f"Recording {recording_id} didn't stop gracefully, terminating")
-                    try:
-                        process.terminate()
-                    except Exception:
-                        pass
+                    process.terminate()
                     try:
                         await asyncio.wait_for(process.wait(), timeout=5.0)
                     except asyncio.TimeoutError:
                         logger.warning(f"Recording {recording_id} didn't terminate, killing")
-                        try:
-                            process.kill()
-                        except Exception:
-                            pass
+                        process.kill()
             except Exception as e:
                 logger.error(f"Error stopping process: {e}")
                 try:
                     process.terminate()
                 except Exception:
                     pass
+            finally:
+                self.processes.pop(recording_id, None)
+                self.start_times.pop(recording_id, None)
         else:
-            # Process in un worker diverso — usa PID dal database
+            # Process in different worker - use PID from database
             pid = recording.get('pid')
             if pid and self.db.is_pid_running(pid):
                 try:
@@ -527,82 +455,38 @@ class RecordingManager:
         recording_id: str,
         process: asyncio.subprocess.Process
     ):
-        """
-        Monitor a recording process and update status when complete.
-
-        Legge stderr in parallelo (drain) e aspetta la fine del processo con
-        process.wait() invece di communicate() per evitare race condition con
-        stop_recording(), che già interagisce con stdin e chiama process.wait().
-        """
-        start_time = self.start_times.get(recording_id, time.time())
-        stderr_chunks = []
-
-        async def _drain_stderr():
-            """Legge stderr senza bloccare il main monitor task."""
-            try:
-                if process.stderr:
-                    while True:
-                        chunk = await process.stderr.read(4096)
-                        if not chunk:
-                            break
-                        stderr_chunks.append(chunk)
-            except Exception:
-                pass
-
+        """Monitor a recording process and update status when complete."""
         try:
-            # Legge stderr in parallelo e aspetta la fine del processo
-            await asyncio.gather(
-                _drain_stderr(),
-                process.wait()
-            )
-        except asyncio.CancelledError:
-            return
-        except Exception as e:
-            logger.error(f"Error monitoring recording {recording_id}: {e}")
+            _, stderr = await process.communicate()
 
-        try:
-            # Se recording_id non è più nei processi, significa che stop_recording()
-            # ha già gestito la terminazione — non sovrascrivere il suo stato 'stopped'.
             if recording_id not in self.processes:
-                # Pulizia finale e uscita senza toccare lo stato nel DB
-                self.start_times.pop(recording_id, None)
                 return
 
-            stderr_text = b"".join(stderr_chunks).decode(errors="replace")
+            stderr_text = stderr.decode() if stderr else ""
+
             if stderr_text:
                 logger.debug(f"Recording {recording_id} FFmpeg output: {stderr_text[:1000]}")
 
-            # returncode == 0 → completato; qualunque altro valore → fallito
-            # (255 = FFmpeg uscito con 'q' — non dovrebbe arrivare qui se
-            #  stop_recording ha già rimosso recording_id da self.processes)
             if process.returncode == 0:
                 logger.info(f"Recording {recording_id} completed successfully")
                 self.db.update_recording_status(recording_id, 'completed')
             else:
-                stderr_text = stderr_text or ""
                 error_msg = stderr_text[:500] if stderr_text else "Unknown error"
-                logger.error(
-                    f"Recording {recording_id} failed with code "
-                    f"{process.returncode}: {error_msg}"
-                )
+                logger.error(f"Recording {recording_id} failed with code {process.returncode}: {error_msg}")
                 self.db.update_recording_status(recording_id, 'failed', error_msg)
 
             recording = self.db.get_recording(recording_id)
             if recording and recording.get('file_path'):
-                rec_duration = int(time.time() - start_time)
-                file_size = self.db.get_total_size(recording_id)
-                self.db.update_recording_file_info(recording_id, rec_duration, file_size)
+                file_path = recording['file_path']
+                if os.path.exists(file_path):
+                    rec_duration = int(time.time() - self.start_times.get(recording_id, time.time()))
+                    file_size = os.path.getsize(file_path)
+                    self.db.update_recording_file_info(recording_id, rec_duration, file_size)
 
-                # ✅ Timeout di inattività per auto-record
-                if recording_id in self.auto_recordings:
-                    timeout_mins = self.auto_record_timeout
-                    last_acc = self.last_accessed.get(recording_id, time.time())
-                    if timeout_mins > 0 and (time.time() - last_acc) > (timeout_mins * 60):
-                        logger.info(f"🛑 DVR: Auto-stop per inattività stream su {recording_id}")
-                        await self.stop_recording(recording_id, manual_stop=False)
-
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
-            logger.error(f"Error in monitor post-process for {recording_id}: {e}")
+            logger.error(f"Error monitoring recording {recording_id}: {e}")
         finally:
             self.processes.pop(recording_id, None)
             self.start_times.pop(recording_id, None)
@@ -616,20 +500,12 @@ class RecordingManager:
         if not recording:
             return False
 
-        direct_path = recording.get('file_path')
-        if direct_path and os.path.exists(direct_path):
+        if recording.get('file_path') and os.path.exists(recording['file_path']):
             try:
-                os.remove(direct_path)
+                os.remove(recording['file_path'])
+                logger.debug(f"Deleted recording file: {recording['file_path']}")
             except Exception as e:
-                logger.error(f"Error deleting file {direct_path}: {e}")
-
-        # Rimuove anche la playlist M3U8 nativa se esiste (vecchi file)
-        m3u8_path = os.path.join(self.recordings_dir, f"{recording_id}.m3u8")
-        if os.path.exists(m3u8_path):
-            try:
-                os.remove(m3u8_path)
-            except Exception:
-                pass
+                logger.error(f"Error deleting file: {e}")
 
         return self.db.delete_recording(recording_id)
 
@@ -708,12 +584,12 @@ class RecordingManager:
         return f"{timestamp}_{unique_suffix}"
 
     def _generate_filename(self, recording_id: str, name: str) -> str:
-        """Genera un filename univoco per la registrazione."""
+        """Generate a safe filename for the recording (MPEG-TS format)."""
         safe_name = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).strip()
         safe_name = safe_name.replace(' ', '_')[:50]
         if not safe_name:
             safe_name = "recording"
-        return f"{recording_id}_{safe_name}.mp4"
+        return f"{recording_id}_{safe_name}.ts"
 
     def _is_recording_active(self, recording: Dict[str, Any]) -> bool:
         """Check if a recording is actively running using DB-stored PID."""
@@ -744,71 +620,8 @@ class RecordingManager:
             return 0
 
     def _enrich_recording(self, recording: Dict[str, Any]) -> Dict[str, Any]:
-        """Add computed fields (is_active, elapsed_seconds, file_size_bytes) to a recording."""
+        """Add computed fields (is_active, elapsed_seconds) to a recording."""
         recording['is_active'] = self._is_recording_active(recording)
         if recording['is_active'] and recording.get('started_at'):
             recording['elapsed_seconds'] = self._calculate_elapsed(recording['started_at'])
-        # ✅ DVR: Aggiorna file_size con la somma di tutti i segmenti in tempo reale
-        total_size = self.db.get_total_size(recording['id'])
-        if total_size > 0:
-            recording['file_size_bytes'] = total_size
         return recording
-
-    # =========================================================================
-    # Auto-Record Toggle
-    # =========================================================================
-
-    @property
-    def auto_record(self) -> bool:
-        """Legge lo stato auto-record dal DB (persistente tra i restart).
-        Fallback al valore di configurazione iniziale DVR_AUTO_RECORD.
-        """
-        val = self.db.get_dvr_config('auto_record')
-        if val is None:
-            return DVR_AUTO_RECORD  # valore dal .env / default False
-        return val == 'true'
-
-    @auto_record.setter
-    def auto_record(self, enabled: bool) -> None:
-        """Persiste lo stato auto-record nel DB."""
-        self.db.set_dvr_config('auto_record', 'true' if enabled else 'false')
-        icon = '🔴' if enabled else '⏹️'
-        state = 'abilitato' if enabled else 'disabilitato'
-        logger.info(f"{icon} Auto-DVR {state}")
-
-    @property
-    def auto_record_timeout(self) -> int:
-        """Minuti di inattività prima che auto-record si fermi da solo."""
-        val = self.db.get_dvr_config('auto_record_timeout')
-        if val is None:
-            return 5  # Default 5 minuti
-        return int(val)
-
-    @auto_record_timeout.setter
-    def auto_record_timeout(self, minutes: int) -> None:
-        self.db.set_dvr_config('auto_record_timeout', str(minutes))
-        logger.info(f"⏱️ DVR: Timeout inattività impostato a {minutes} minuti")
-
-    def touch_recording_by_url(self, stream_url: str):
-        """Aggiorna il timestamp di accesso per l'auto-record timeout e rinnova la blacklist se l'utente sta ancora guardando."""
-        for rec in self.get_active_recordings():
-            if stream_url in rec.get('url', ''):
-                rec_id = rec['id']
-                if rec_id in self.auto_recordings:
-                    self.last_accessed[rec_id] = time.time()
-                    
-        # Helper: controlla se due path appartengono alla stessa sessione
-        def is_same_session(path1: str, path2: str) -> bool:
-            return path1.startswith(path2) or path2.startswith(path1)
-            
-        # Se l'utente ha bloccato a mano lo stream, rinnova il blocco per la sessione
-        import urllib.parse
-        parsed = urllib.parse.urlparse(stream_url)
-        base_path = f"{parsed.scheme}://{parsed.netloc}{os.path.dirname(parsed.path)}"
-        
-        if stream_url in self.manual_stops:
-            self.manual_stops[stream_url] = time.time()
-            
-        for stop_path in list(self.manual_stops.keys()):
-            if stop_path.startswith('http') and is_same_session(base_path, stop_path):
-                self.manual_stops[stop_path] = time.time()

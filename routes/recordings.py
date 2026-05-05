@@ -19,19 +19,7 @@ def setup_recording_routes(app, recording_manager):
         )
         try:
             with open(template_path, 'r', encoding='utf-8') as f:
-                html = f.read()
-                
-            try:
-                import subprocess
-                repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                commit_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=repo_dir, stderr=subprocess.DEVNULL).decode('utf-8').strip()
-                commit_msg = subprocess.check_output(['git', 'log', '-1', '--pretty=%s'], cwd=repo_dir, stderr=subprocess.DEVNULL).decode('utf-8').strip()
-                version_str = f"Commit: {commit_hash} - {commit_msg}"
-            except Exception as e:
-                version_str = f"Git Version Unknown ({e})"
-                
-            html = html.replace('<!-- GIT_VERSION_PLACEHOLDER -->', version_str)
-            return web.Response(text=html, content_type='text/html')
+                return web.Response(text=f.read(), content_type='text/html')
         except FileNotFoundError:
             return web.Response(text="Recordings template not found",
                                status=404)
@@ -175,24 +163,35 @@ def setup_recording_routes(app, recording_manager):
         recording_id = request.match_info['id']
         recording = recording_manager.get_recording(recording_id)
 
-        if not recording or not recording.get('file_path'):
+        if not recording:
+            return web.json_response({"error": "Recording not found"},
+                                    status=404)
+
+        file_path = recording.get('file_path')
+        if not file_path or not os.path.exists(file_path):
             return web.json_response({"error": "Recording file not found"},
                                     status=404)
 
-        file_path = recording['file_path']
-        if not os.path.exists(file_path):
-            return web.json_response({"error": "Recording file not found on disk"},
-                                    status=404)
+        # Security check
+        recordings_dir = os.path.abspath(recording_manager.recordings_dir)
+        file_abs = os.path.abspath(file_path)
+        if not file_abs.startswith(recordings_dir):
+            return web.json_response({"error": "Access denied"}, status=403)
 
-        safe_name = recording.get("name", "recording").replace(" ", "_")
-        filename = f"{safe_name}.mp4"
+        filename = os.path.basename(file_path)
+
+        # Determine content type based on extension
+        content_type = "video/MP2T"
+        if filename.endswith('.mp4'):
+            content_type = "video/mp4"
+        elif filename.endswith('.mkv'):
+            content_type = "video/x-matroska"
 
         return web.FileResponse(
             file_path,
             headers={
-                "Content-Type": "video/mp4",
                 "Content-Disposition": f'attachment; filename="{filename}"',
-                "Access-Control-Allow-Origin": "*"
+                "Content-Type": content_type
             }
         )
 
@@ -211,54 +210,70 @@ def setup_recording_routes(app, recording_manager):
         recording_id = request.match_info['id']
         recording = recording_manager.get_recording(recording_id)
 
-        if not recording or not recording.get('file_path'):
+        if not recording:
             return web.json_response({"error": "Recording not found"},
                                     status=404)
 
-        file_path = recording['file_path']
-        if not os.path.exists(file_path):
-            return web.json_response({"error": "Recording file not found on disk"},
+        file_path = recording.get('file_path')
+        if not file_path or not os.path.exists(file_path):
+            return web.json_response({"error": "Recording file not found"},
                                     status=404)
 
-        is_active = recording.get('is_active', False)
+        # Security check
+        recordings_dir = os.path.abspath(recording_manager.recordings_dir)
+        file_abs = os.path.abspath(file_path)
+        if not file_abs.startswith(recordings_dir):
+            return web.json_response({"error": "Access denied"}, status=403)
 
-        if not is_active:
-            # File completo, web.FileResponse supporta Byte-Range requests in automatico (Seek perfetto)
+        # Determine content type based on extension
+        content_type = "video/MP2T"
+        if file_path.endswith('.mp4'):
+            content_type = "video/mp4"
+        elif file_path.endswith('.mkv'):
+            content_type = "video/x-matroska"
+
+        # For completed recordings: use efficient FileResponse
+        if not recording.get('is_active'):
             return web.FileResponse(
                 file_path,
                 headers={
-                    "Content-Type": "video/mp4",
+                    "Content-Type": content_type,
                     "Access-Control-Allow-Origin": "*"
                 }
             )
 
-        # File in crescita (streaming attivo)
+        # For active recordings: stream growing file with chunked transfer
         response = web.StreamResponse(
             status=200,
             headers={
-                "Content-Type": "video/mp4",
+                "Content-Type": content_type,
+                "Transfer-Encoding": "chunked",
                 "Access-Control-Allow-Origin": "*",
                 "Cache-Control": "no-cache"
             }
         )
         await response.prepare(request)
 
-        # Manda il contenuto del file in streaming man mano che cresce
+        logger.debug(f"Starting live stream of active recording {recording_id}")
+
         try:
             with open(file_path, 'rb') as f:
                 while True:
-                    chunk = f.read(65536)
+                    chunk = f.read(65536)  # 64KB chunks
                     if chunk:
                         await response.write(chunk)
-                        await asyncio.sleep(0.01)  # small yield
                     else:
-                        # Se è finito il chunk ma la rec è attiva, aspetta ffmpeg
-                        recording = recording_manager.get_recording(recording_id)
-                        if not recording or not recording.get('is_active', False):
+                        # Check if recording is still active
+                        rec = recording_manager.get_recording(recording_id)
+                        if not rec or not rec.get('is_active'):
+                            logger.debug(f"Recording {recording_id} finished, ending stream")
                             break
+                        # Wait for more data from FFmpeg
                         await asyncio.sleep(0.5)
+        except ConnectionResetError:
+            logger.debug(f"Client disconnected from recording {recording_id} stream")
         except Exception as e:
-            logger.warning(f"Stream aborted: {e}")
+            logger.warning(f"Error streaming recording {recording_id}: {e}")
 
         await response.write_eof()
         return response
@@ -270,38 +285,6 @@ def setup_recording_routes(app, recording_manager):
 
         recordings = recording_manager.get_active_recordings()
         return web.json_response({"recordings": recordings})
-
-    async def handle_get_dvr_config(request):
-        """GET /api/dvr/config - Legge la configurazione DVR corrente."""
-        if not check_password(request):
-            return web.json_response({"error": "Unauthorized"}, status=401)
-        return web.json_response({
-            "auto_record": recording_manager.auto_record,
-            "auto_record_timeout": recording_manager.auto_record_timeout,
-            "segment_minutes": recording_manager.segment_seconds // 60,
-        })
-
-    async def handle_set_dvr_config(request):
-        """POST /api/dvr/config - Aggiorna la configurazione DVR.
-        Body JSON: { "auto_record": true/false, "auto_record_timeout": 5 }
-        """
-        if not check_password(request):
-            return web.json_response({"error": "Unauthorized"}, status=401)
-        try:
-            data = await request.json()
-        except Exception:
-            return web.json_response({"error": "Invalid JSON"}, status=400)
-            
-        if 'auto_record' in data:
-            recording_manager.auto_record = bool(data['auto_record'])
-        if 'auto_record_timeout' in data:
-            recording_manager.auto_record_timeout = int(data['auto_record_timeout'])
-            
-        return web.json_response({
-            "auto_record": recording_manager.auto_record,
-            "auto_record_timeout": recording_manager.auto_record_timeout,
-            "segment_minutes": recording_manager.segment_seconds // 60,
-        })
 
     async def handle_record_via_get(request):
         """GET /record - Start recording and return a playable stream.
@@ -437,8 +420,8 @@ def setup_recording_routes(app, recording_manager):
 
     # Register routes
     app.router.add_get('/recordings', handle_recordings_page)
-    app.router.add_get('/record', handle_record_via_get)
-    app.router.add_get('/record/stop/{id}', handle_stop_and_stream)
+    app.router.add_get('/record', handle_record_via_get)  # GET endpoint for StreamVix
+    app.router.add_get('/record/stop/{id}', handle_stop_and_stream)  # Stop recording and stream
     app.router.add_get('/api/recordings', handle_list_recordings)
     app.router.add_get('/api/recordings/active', handle_active_recordings)
     app.router.add_post('/api/recordings/start', handle_start_recording)
@@ -449,8 +432,5 @@ def setup_recording_routes(app, recording_manager):
     app.router.add_get('/api/recordings/{id}/delete', handle_delete_recording_get)
     app.router.add_get('/api/recordings/{id}/download', handle_download_recording)
     app.router.add_get('/api/recordings/{id}/stream', handle_stream_recording)
-    # ✅ DVR Config API
-    app.router.add_get('/api/dvr/config', handle_get_dvr_config)
-    app.router.add_post('/api/dvr/config', handle_set_dvr_config)
 
     logger.debug("Recording routes registered")

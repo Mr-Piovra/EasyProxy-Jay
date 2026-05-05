@@ -457,58 +457,12 @@
             color: var(--text-secondary);
             text-transform: uppercase;
         }
-
-        /* Toggle switch per auto-recording */
-        .toggle-switch {
-            position: relative;
-            display: inline-block;
-            width: 56px;
-            height: 28px;
-            cursor: pointer;
-            flex-shrink: 0;
-        }
-        .toggle-switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-        .toggle-slider {
-            position: absolute;
-            inset: 0;
-            background: rgba(255,255,255,0.15);
-            border-radius: 28px;
-            transition: var(--transition-normal);
-        }
-        .toggle-slider::before {
-            content: '';
-            position: absolute;
-            width: 22px;
-            height: 22px;
-            left: 3px;
-            top: 3px;
-            background: white;
-            border-radius: 50%;
-            transition: var(--transition-normal);
-            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-        }
-        .toggle-switch input:checked + .toggle-slider {
-            background: var(--accent-error);
-            box-shadow: 0 0 12px rgba(239,68,68,0.5);
-        }
-        .toggle-switch input:checked + .toggle-slider::before {
-            transform: translateX(28px);
-        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <div>
-                <h1>DVR Recordings</h1>
-                <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px; font-family: monospace;">
-                    <!-- GIT_VERSION_PLACEHOLDER -->
-                </div>
-            </div>
+            <h1>DVR Recordings</h1>
             <nav class="nav-links">
                 <a href="/" class="nav-link">Home</a>
                 <a href="/builder" class="nav-link">Builder</a>
@@ -528,32 +482,6 @@
             <div class="stat-card">
                 <div class="stat-value" id="totalSize">0 MB</div>
                 <div class="stat-label">Total Size</div>
-            </div>
-        </div>
-
-        <div class="card" id="autoRecordCard">
-            <div class="card-header">
-                <div>
-                    <h2 class="card-title">🔴 Auto-Recording</h2>
-                    <p style="color: var(--text-secondary); font-size:0.875rem; margin-top:4px;">
-                        Avvia automaticamente una registrazione quando un dispositivo guarda una diretta tramite il proxy
-                    </p>
-                </div>
-                <label class="toggle-switch" title="Attiva/disattiva auto-recording">
-                    <input type="checkbox" id="autoRecordToggle" onchange="setAutoRecord(this.checked)">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            <div id="autoRecordStatus" style="color: var(--text-secondary); font-size:0.875rem;">
-                Caricamento stato...
-            </div>
-            <div class="form-group" style="margin-top: 1rem; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1rem;">
-                <label class="form-label" for="autoRecordTimeout">Timeout inattività stream (minuti)</label>
-                <div style="display: flex; gap: 10px; align-items: center;">
-                    <input type="number" id="autoRecordTimeout" class="form-input" min="0" style="max-width: 100px;">
-                    <button class="btn btn-secondary btn-sm" onclick="saveTimeout()">Salva</button>
-                </div>
-                <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">Se nessun dispositivo richiede lo stream per questi minuti, la registrazione si ferma automaticamente (0 = nessun timeout).</p>
             </div>
         </div>
 
@@ -641,66 +569,6 @@
                 headers['x-api-password'] = API_PASSWORD;
             }
             return headers;
-        }
-
-        // --- DVR Config: Auto-Recording Toggle & Timeout ---
-        async function loadDvrConfig() {
-            try {
-                const resp = await fetch(`/api/dvr/config${getAuthParams()}`, { headers: getAuthHeaders() });
-                if (!resp.ok) return;
-                const data = await resp.json();
-                
-                const toggle = document.getElementById('autoRecordToggle');
-                const status = document.getElementById('autoRecordStatus');
-                const timeoutInput = document.getElementById('autoRecordTimeout');
-                
-                toggle.checked = data.auto_record;
-                timeoutInput.value = data.auto_record_timeout || 5;
-                
-                const segMin = data.segment_minutes || 10;
-                if (data.auto_record) {
-                    status.innerHTML = `<span style="color:var(--accent-error)">🔴 Attivo</span> &mdash; ogni diretta guardata viene registrata in un unico file <strong>.mp4</strong>. La registrazione si ferma dopo <strong>${data.auto_record_timeout || '∞'} min</strong> di inattività.`;
-                } else {
-                    status.innerHTML = `<span style="color:var(--text-muted)">⏹ Disattivo</span> &mdash; attiva il toggle per registrare automaticamente le dirette guardate. Ogni registrazione viene salvata come un unico file <strong>.mp4</strong>.`;
-                }
-            } catch (e) {
-                document.getElementById('autoRecordStatus').textContent = 'Impossibile caricare la configurazione DVR.';
-            }
-        }
-
-        async function saveTimeout() {
-            const timeoutVal = document.getElementById('autoRecordTimeout').value;
-            try {
-                const resp = await fetch(`/api/dvr/config${getAuthParams()}`, {
-                    method: 'POST',
-                    headers: getAuthHeaders(),
-                    body: JSON.stringify({ auto_record_timeout: parseInt(timeoutVal) })
-                });
-                if (resp.ok) {
-                    showToast(`Timeout impostato a ${timeoutVal} minuti`);
-                } else {
-                    showToast('Errore salvataggio timeout', 'error');
-                }
-            } catch(e) {
-                showToast('Errore rete', 'error');
-            }
-        }
-
-        async function setAutoRecord(enabled) {
-            try {
-                const resp = await fetch(`/api/dvr/config${getAuthParams()}`, {
-                    method: 'POST',
-                    headers: getAuthHeaders(),
-                    body: JSON.stringify({ auto_record: enabled })
-                });
-                const data = await resp.json();
-                showToast(enabled ? '🔴 Auto-Recording attivato' : '⏹ Auto-Recording disattivato', enabled ? 'success' : 'success');
-                await loadDvrConfig();
-            } catch (e) {
-                showToast('Errore nel cambiare la configurazione', 'error');
-                // Ripristina il toggle allo stato precedente
-                await loadDvrConfig();
-            }
         }
 
         function showToast(message, type = 'success') {
@@ -794,10 +662,10 @@
                         </div>
                         <div class="recording-actions">
                             ${rec.is_active ? `
-                                <button class="btn btn-danger btn-sm" id="stop-btn-${rec.id}" onclick="stopRecording('${rec.id}')">Stop</button>
+                                <button class="btn btn-danger btn-sm" onclick="stopRecording('${rec.id}')">Stop</button>
                             ` : `
                                 ${rec.file_size_bytes ? `
-                                    <a href="vlc://${window.location.origin}/api/recordings/${rec.id}/stream${getAuthParams()}" class="btn btn-secondary btn-sm">Play in VLC</a>
+                                    <a href="/api/recordings/${rec.id}/stream${getAuthParams()}" target="_blank" class="btn btn-secondary btn-sm">Play</a>
                                     <a href="/api/recordings/${rec.id}/download${getAuthParams()}" class="btn btn-secondary btn-sm">Download</a>
                                 ` : ''}
                                 <button class="btn btn-danger btn-sm" onclick="openDeleteModal('${rec.id}')">Delete</button>
@@ -854,11 +722,6 @@
         }
 
         async function stopRecording(id) {
-            const btn = document.getElementById(`stop-btn-${id}`);
-            if (btn) {
-                btn.disabled = true;
-                btn.textContent = 'Stopping...';
-            }
             try {
                 const response = await fetch(`/api/recordings/${id}/stop${getAuthParams()}`, {
                     method: 'POST',
@@ -877,11 +740,6 @@
             } catch (error) {
                 console.error('Error stopping recording:', error);
                 showToast(error.message, 'error');
-                // Riabilita il bottone in caso di errore
-                if (btn) {
-                    btn.disabled = false;
-                    btn.textContent = 'Stop';
-                }
             }
         }
 
@@ -965,7 +823,6 @@
 
         // Initial load
         loadRecordings();
-        loadDvrConfig();  // ✅ Carica stato auto-recording al boot
 
         // Auto-refresh every 5 seconds for active recordings
         setInterval(loadRecordings, 5000);
