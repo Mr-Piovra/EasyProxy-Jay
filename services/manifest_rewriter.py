@@ -597,8 +597,8 @@ class ManifestRewriter:
                     and "#EXT-X-ENDLIST" not in manifest_content 
                     and "#EXT-X-START:" not in manifest_content
                 ):
-                    # -20.0 secondi costringe il player a partire un po' prima del bordo live,
-                    # permettendogli di scaricare in anticipo 2 o 3 segmenti e costruire un buffer solido.
-                    rewritten_lines.append("#EXT-X-START:TIME-OFFSET=-20.0,PRECISE=YES")
+                    # -6.0 secondi ≈ 2 segmenti da 3s: dà al player un buffer iniziale
+                    # sufficiente per evitare lo stutter senza introdurre un ritardo percepibile.
+                    rewritten_lines.append("#EXT-X-START:TIME-OFFSET=-6.0,PRECISE=YES")
 
         return "\n".join(rewritten_lines)

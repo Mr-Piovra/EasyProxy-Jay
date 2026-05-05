@@ -297,10 +297,6 @@ DVR_ENABLED = os.environ.get("DVR_ENABLED", "false").lower() in ("true", "1", "y
 RECORDINGS_DIR = os.environ.get("RECORDINGS_DIR", "recordings")
 MAX_RECORDING_DURATION = int(os.environ.get("MAX_RECORDING_DURATION", 28800))
 RECORDINGS_RETENTION_DAYS = int(os.environ.get("RECORDINGS_RETENTION_DAYS", 7))
-# Durata di ogni segmento in minuti (default 10 → ~600MB/file al bitrate attuale)
-DVR_SEGMENT_MINUTES = int(os.environ.get("DVR_SEGMENT_MINUTES", 10))
-# Auto-recording delle dirette visualizzate: OFF per default, toggle via /api/dvr/config
-DVR_AUTO_RECORD = os.environ.get("DVR_AUTO_RECORD", "false").lower() in ("true", "1", "yes")
 
 # --- Version/Mode Configuration ---
 APP_VERSION = "2.6.26"
