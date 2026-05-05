@@ -185,12 +185,12 @@ def setup_recording_routes(app, recording_manager):
                                     status=404)
 
         safe_name = recording.get("name", "recording").replace(" ", "_")
-        filename = f"{safe_name}.ts"
+        filename = f"{safe_name}.mp4"
 
         return web.FileResponse(
             file_path,
             headers={
-                "Content-Type": "video/MP2T",
+                "Content-Type": "video/mp4",
                 "Content-Disposition": f'attachment; filename="{filename}"',
                 "Access-Control-Allow-Origin": "*"
             }
@@ -227,7 +227,7 @@ def setup_recording_routes(app, recording_manager):
             return web.FileResponse(
                 file_path,
                 headers={
-                    "Content-Type": "video/MP2T",
+                    "Content-Type": "video/mp4",
                     "Access-Control-Allow-Origin": "*"
                 }
             )
@@ -236,7 +236,7 @@ def setup_recording_routes(app, recording_manager):
         response = web.StreamResponse(
             status=200,
             headers={
-                "Content-Type": "video/MP2T",
+                "Content-Type": "video/mp4",
                 "Access-Control-Allow-Origin": "*",
                 "Cache-Control": "no-cache"
             }

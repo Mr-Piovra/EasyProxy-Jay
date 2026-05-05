@@ -794,7 +794,7 @@
                         </div>
                         <div class="recording-actions">
                             ${rec.is_active ? `
-                                <button class="btn btn-danger btn-sm" onclick="stopRecording('${rec.id}')">Stop</button>
+                                <button class="btn btn-danger btn-sm" id="stop-btn-${rec.id}" onclick="stopRecording('${rec.id}')">Stop</button>
                             ` : `
                                 ${rec.file_size_bytes ? `
                                     <a href="vlc://${window.location.origin}/api/recordings/${rec.id}/stream${getAuthParams()}" class="btn btn-secondary btn-sm">Play in VLC</a>
@@ -854,6 +854,11 @@
         }
 
         async function stopRecording(id) {
+            const btn = document.getElementById(`stop-btn-${id}`);
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = 'Stopping...';
+            }
             try {
                 const response = await fetch(`/api/recordings/${id}/stop${getAuthParams()}`, {
                     method: 'POST',
@@ -872,6 +877,11 @@
             } catch (error) {
                 console.error('Error stopping recording:', error);
                 showToast(error.message, 'error');
+                // Riabilita il bottone in caso di errore
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = 'Stop';
+                }
             }
         }
 

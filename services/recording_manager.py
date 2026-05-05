@@ -312,11 +312,12 @@ class RecordingManager:
         else:
             cmd.extend(["-map", "0:v:0", "-map", "0:a:0?"])
 
-        # Output diretto a file singolo MPEG-TS
-        # Il formato .ts è resiliente alle corruzioni in caso di crash
+        # Output diretto a file singolo MP4 con faststart per seek corretto in VLC
+        # -movflags +faststart sposta l'indice (moov atom) all'inizio del file
         cmd.extend(["-c", "copy"])
         cmd.extend([
-            "-f", "mpegts",
+            "-f", "mp4",
+            "-movflags", "+faststart",
             output_path
         ])
 
@@ -449,36 +450,50 @@ class RecordingManager:
             logger.warning(f"Recording {recording_id} not found in database")
             return False
 
-        if recording_id in self.processes:
-            process = self.processes[recording_id]
-            try:
-                # Send 'q' to FFmpeg for graceful shutdown
-                if process.stdin:
-                    process.stdin.write(b'q')
-                    await process.stdin.drain()
-                    process.stdin.close()
+        # Rimuove subito il processo dal dizionario per segnalare al monitor
+        # che lo stop è stato richiesto esplicitamente (evita race condition)
+        process = self.processes.pop(recording_id, None)
+        self.start_times.pop(recording_id, None)
 
+        if process is not None:
+            try:
+                # Invia 'q' a FFmpeg per uno shutdown graceful
+                if process.stdin and not process.stdin.is_closing():
+                    try:
+                        process.stdin.write(b'q')
+                        await process.stdin.drain()
+                    except Exception:
+                        pass
+                    try:
+                        process.stdin.close()
+                    except Exception:
+                        pass
+
+                # Aspetta terminazione graceful
                 try:
                     await asyncio.wait_for(process.wait(), timeout=10.0)
                 except asyncio.TimeoutError:
                     logger.warning(f"Recording {recording_id} didn't stop gracefully, terminating")
-                    process.terminate()
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
                     try:
                         await asyncio.wait_for(process.wait(), timeout=5.0)
                     except asyncio.TimeoutError:
                         logger.warning(f"Recording {recording_id} didn't terminate, killing")
-                        process.kill()
+                        try:
+                            process.kill()
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.error(f"Error stopping process: {e}")
                 try:
                     process.terminate()
                 except Exception:
                     pass
-            finally:
-                self.processes.pop(recording_id, None)
-                self.start_times.pop(recording_id, None)
         else:
-            # Process in different worker - use PID from database
+            # Process in un worker diverso — usa PID dal database
             pid = recording.get('pid')
             if pid and self.db.is_pid_running(pid):
                 try:
@@ -511,30 +526,69 @@ class RecordingManager:
         recording_id: str,
         process: asyncio.subprocess.Process
     ):
-        """Monitor a recording process and update status when complete."""
-        try:
-            _, stderr = await process.communicate()
+        """
+        Monitor a recording process and update status when complete.
 
+        Legge stderr in parallelo (drain) e aspetta la fine del processo con
+        process.wait() invece di communicate() per evitare race condition con
+        stop_recording(), che già interagisce con stdin e chiama process.wait().
+        """
+        start_time = self.start_times.get(recording_id, time.time())
+        stderr_chunks = []
+
+        async def _drain_stderr():
+            """Legge stderr senza bloccare il main monitor task."""
+            try:
+                if process.stderr:
+                    while True:
+                        chunk = await process.stderr.read(4096)
+                        if not chunk:
+                            break
+                        stderr_chunks.append(chunk)
+            except Exception:
+                pass
+
+        try:
+            # Legge stderr in parallelo e aspetta la fine del processo
+            await asyncio.gather(
+                _drain_stderr(),
+                process.wait()
+            )
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            logger.error(f"Error monitoring recording {recording_id}: {e}")
+
+        try:
+            # Se recording_id non è più nei processi, significa che stop_recording()
+            # ha già gestito la terminazione — non sovrascrivere il suo stato 'stopped'.
             if recording_id not in self.processes:
+                # Pulizia finale e uscita senza toccare lo stato nel DB
+                self.start_times.pop(recording_id, None)
                 return
 
-            stderr_text = stderr.decode() if stderr else ""
-
+            stderr_text = b"".join(stderr_chunks).decode(errors="replace")
             if stderr_text:
                 logger.debug(f"Recording {recording_id} FFmpeg output: {stderr_text[:1000]}")
 
+            # returncode == 0 → completato; qualunque altro valore → fallito
+            # (255 = FFmpeg uscito con 'q' — non dovrebbe arrivare qui se
+            #  stop_recording ha già rimosso recording_id da self.processes)
             if process.returncode == 0:
                 logger.info(f"Recording {recording_id} completed successfully")
                 self.db.update_recording_status(recording_id, 'completed')
             else:
+                stderr_text = stderr_text or ""
                 error_msg = stderr_text[:500] if stderr_text else "Unknown error"
-                logger.error(f"Recording {recording_id} failed with code {process.returncode}: {error_msg}")
+                logger.error(
+                    f"Recording {recording_id} failed with code "
+                    f"{process.returncode}: {error_msg}"
+                )
                 self.db.update_recording_status(recording_id, 'failed', error_msg)
 
             recording = self.db.get_recording(recording_id)
             if recording and recording.get('file_path'):
-                file_path = recording['file_path']
-                rec_duration = int(time.time() - self.start_times.get(recording_id, time.time()))
+                rec_duration = int(time.time() - start_time)
                 file_size = self.db.get_total_size(recording_id)
                 self.db.update_recording_file_info(recording_id, rec_duration, file_size)
 
@@ -546,10 +600,8 @@ class RecordingManager:
                         logger.info(f"🛑 DVR: Auto-stop per inattività stream su {recording_id}")
                         await self.stop_recording(recording_id, manual_stop=False)
 
-        except asyncio.CancelledError:
-            pass
         except Exception as e:
-            logger.error(f"Error monitoring recording {recording_id}: {e}")
+            logger.error(f"Error in monitor post-process for {recording_id}: {e}")
         finally:
             self.processes.pop(recording_id, None)
             self.start_times.pop(recording_id, None)
@@ -660,7 +712,7 @@ class RecordingManager:
         safe_name = safe_name.replace(' ', '_')[:50]
         if not safe_name:
             safe_name = "recording"
-        return f"{recording_id}_{safe_name}.ts"
+        return f"{recording_id}_{safe_name}.mp4"
 
     def _is_recording_active(self, recording: Dict[str, Any]) -> bool:
         """Check if a recording is actively running using DB-stored PID."""
