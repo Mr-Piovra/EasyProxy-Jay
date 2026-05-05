@@ -266,9 +266,9 @@ chmod +x "$PREFIX/bin/easyproxy"
 
 cat > "$PREFIX/bin/easyproxy-update" << 'UPD_EOF'
 #!/data/data/com.termux/files/usr/bin/bash
-echo "Running full EasyProxy system update..."
+echo "Pulling latest EasyProxy updates..."
 easyproxy-stop 2>/dev/null || true
-curl -sL "https://raw.githubusercontent.com/realbestia1/EasyProxy/main/termux_setup.sh?$(date +%s)" | bash
+proot-distro login ubuntu -- bash -c "cd /root/EasyProxy && git fetch && git reset --hard origin/main && source venv/bin/activate && pip install -r requirements.txt --upgrade"
 echo "EasyProxy system updated successfully!"
 easyproxy
 UPD_EOF
