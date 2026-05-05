@@ -344,14 +344,17 @@ except ImportError:
 # ==============================================================================
 # Auto-DVR Helper
 # ==============================================================================
-async def _auto_record_live_stream(stream_url: str, recording_manager):
+async def _auto_record_live_stream(stream_url: str, proxy_url: str, recording_manager):
     """Avvia auto-recording se non c'è già una registrazione attiva per questo URL.
-    La dedup è garantita a livello DB dall'unique index.
+    La dedup è super aggressiva: controlla se lo stream_url base è già dentro una registrazione attiva,
+    evitando la creazione di micro-file causati da piccoli sbalzi di connessione del player.
     """
     try:
-        existing = recording_manager.get_pending_recording_by_url(stream_url)
-        if existing:
-            return  # Già in registrazione, skip
+        # Prevenzione micro-file: controlla tutte le registrazioni attive
+        active_recs = recording_manager.get_active_recordings()
+        for rec in active_recs:
+            if stream_url in rec.get('url', ''):
+                return  # Già in registrazione, skip silenzioso
         
         # Genera nome dal dominio
         from urllib.parse import urlparse
@@ -360,7 +363,8 @@ async def _auto_record_live_stream(stream_url: str, recording_manager):
         name = f"{parsed.netloc or 'live'} - {datetime.datetime.now().strftime('%d/%m %H:%M')}"
         
         logger.info(f"🔴 Auto-DVR: avvio registrazione automatica per {stream_url[:60]}...")
-        await recording_manager.start_recording(url=stream_url, name=name)
+        # ✅ Fornisce a FFmpeg il proxy_url interno (127.0.0.1) così sfrutta la cache e la stabilità del proxy!
+        await recording_manager.start_recording(url=proxy_url, name=name)
     except Exception as e:
         logger.warning(f"⚠️ Auto-DVR: errore nell'avvio della registrazione: {e}")
 
@@ -3469,8 +3473,10 @@ class HLSProxy:
                             and request.path in ('/proxy/hls/manifest.m3u8', '/proxy/manifest.m3u8')
                             and '#EXT-X-ENDLIST' not in manifest_content
                             and _rm.auto_record):
+                        from config import PORT
+                        _proxy_url = f"http://127.0.0.1:{PORT}{request.path_qs}"
                         asyncio.create_task(
-                            _auto_record_live_stream(stream_url, _rm)
+                            _auto_record_live_stream(stream_url, _proxy_url, _rm)
                         )
 
                     return web.Response(text=rewritten, headers={
