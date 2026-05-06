@@ -38,6 +38,7 @@ class VavooExtractor:
         self.proxies = proxies or GLOBAL_PROXIES
         self._cached_sig = None
         self._cached_sig_ts = 0
+        self._url_cache = {}  # {url: (resolved_url, stream_headers, timestamp)}
 
     def _get_random_proxy(self):
         """Restituisce un proxy casuale dalla lista."""
@@ -203,9 +204,21 @@ class VavooExtractor:
         token = m.group(1)
         return f"https://www2.vavoo.to/live2/{token}.ts?n=1&b=5&vavoo_auth={quote_plus(ts_sig)}"
 
-    async def extract(self, url: str, **kwargs) -> Dict[str, Any]:
+    async def extract(self, url: str, force_refresh: bool = False, **kwargs) -> Dict[str, Any]:
         if "vavoo.to" not in url:
             raise ExtractorError("Not a valid Vavoo URL")
+        
+        if not force_refresh and url in self._url_cache:
+            cached_url, cached_headers, ts = self._url_cache[url]
+            # Cache is valid for 1 hour (tokens are long-lived)
+            if time.time() - ts < 3600:
+                logger.debug(f"Using cached resolved URL for: {url[:80]}...")
+                return {
+                    "destination_url": cached_url,
+                    "request_headers": cached_headers,
+                    "mediaflow_endpoint": self.mediaflow_endpoint,
+                    "disable_ssl": True,
+                }
         
         resolved_url = None
         stream_headers = {}
@@ -244,6 +257,9 @@ class VavooExtractor:
             }
 
         stream_headers["X-EasyProxy-Disable-SSL"] = "1"
+        
+        # Save to cache
+        self._url_cache[url] = (resolved_url, stream_headers, time.time())
 
         return {
             "destination_url": resolved_url,
