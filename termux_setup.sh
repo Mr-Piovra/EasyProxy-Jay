@@ -184,6 +184,7 @@ elif [ -f "/usr/bin/chromium-browser" ]; then
 fi
 
 export CHROME_EXE_PATH="${CHROME_BIN:-}"
+export CHROME_PATH="${CHROME_BIN:-}"
 export CHROME_DRIVER_PATH="/usr/bin/chromedriver"
 export FLARESOLVERR_URL=http://localhost:8191
 if [ ! -d /root/EasyProxy ]; then
