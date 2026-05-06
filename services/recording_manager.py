@@ -468,8 +468,9 @@ class RecordingManager:
                 logger.debug(f"Recording {recording_id} FFmpeg output: {stderr_text[:1000]}")
 
             if process.returncode == 0:
-                logger.info(f"Recording {recording_id} completed successfully")
-                self.db.update_recording_status(recording_id, 'completed')
+                logger.info(f"Recording {recording_id} completed successfully. Starting HEVC transcoding...")
+                self.db.update_recording_status(recording_id, 'transcoding')
+                asyncio.create_task(self._transcode_recording(recording_id))
             else:
                 error_msg = stderr_text[:500] if stderr_text else "Unknown error"
                 logger.error(f"Recording {recording_id} failed with code {process.returncode}: {error_msg}")
@@ -490,6 +491,73 @@ class RecordingManager:
         finally:
             self.processes.pop(recording_id, None)
             self.start_times.pop(recording_id, None)
+
+    async def _transcode_recording(self, recording_id: str):
+        """Offline background HEVC transcoding to save space on mobile."""
+        recording = self.db.get_recording(recording_id)
+        if not recording or not recording.get('file_path'):
+            return
+            
+        input_path = recording['file_path']
+        if not os.path.exists(input_path):
+            self.db.update_recording_status(recording_id, 'failed', "Original file missing for transcoding")
+            return
+            
+        output_path = input_path.replace('.ts', '.mp4')
+        if output_path == input_path:
+            output_path = input_path + '.mp4'
+            
+        # Mi 9 Lite (Snapdragon 710): libx265 is CPU-heavy. 
+        # preset ultrafast + crf 28 is the best balance for mobile.
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "warning", "-y",
+            "-i", input_path,
+            "-c:v", "libx265",
+            "-preset", "ultrafast",
+            "-crf", "28",
+            "-c:a", "copy",  # Audio is usually AAC/mp2 already, no need to transcode
+            output_path
+        ]
+        
+        logger.info(f"🔄 Transcoding {recording_id} to HEVC...")
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            _, stderr = await process.communicate()
+            
+            if process.returncode == 0 and os.path.exists(output_path):
+                original_size = os.path.getsize(input_path)
+                new_size = os.path.getsize(output_path)
+                
+                # Replace old file
+                os.remove(input_path)
+                
+                # Update DB
+                with self.db._get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE recordings
+                        SET file_path = ?, file_size_bytes = ?, status = 'completed'
+                        WHERE id = ?
+                    """, (output_path, new_size, recording_id))
+                
+                saved_percent = int(100 - (new_size / max(original_size, 1)) * 100)
+                logger.info(f"✅ Transcoding {recording_id} finished. Saved ~{saved_percent}% space.")
+            else:
+                stderr_text = stderr.decode() if stderr else "Unknown error"
+                logger.error(f"❌ Transcoding failed for {recording_id}: {stderr_text[:500]}")
+                # Revert to completed with original file
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+                self.db.update_recording_status(recording_id, 'completed', "Transcoding failed, kept original")
+                
+        except Exception as e:
+            logger.error(f"❌ Exception during transcoding {recording_id}: {e}")
+            self.db.update_recording_status(recording_id, 'completed', "Transcoding exception, kept original")
 
     async def delete_recording(self, recording_id: str) -> bool:
         """Delete a recording and its file."""

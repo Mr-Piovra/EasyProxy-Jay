@@ -147,7 +147,7 @@ class RecordingDB:
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            if status in ('completed', 'failed', 'stopped'):
+            if status in ('completed', 'failed', 'stopped', 'transcoding'):
                 stopped_at = datetime.utcnow().isoformat()
                 cursor.execute("""
                     UPDATE recordings
