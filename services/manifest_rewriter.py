@@ -297,9 +297,9 @@ class ManifestRewriter:
 
         if generic_streams:
             highest_quality_stream = max(generic_streams, key=lambda x: x["bandwidth"])
-            logger.debug(
-                "Generic HLS: selected max bandwidth %s.",
-                highest_quality_stream["bandwidth"],
+            mbps = highest_quality_stream["bandwidth"] / 1_000_000
+            logger.info(
+                f"📊 Vavoo Stream Bandwidth: {mbps:.2f} Mbps ({highest_quality_stream['bandwidth']} bps)"
             )
 
             header_params = "".join(
