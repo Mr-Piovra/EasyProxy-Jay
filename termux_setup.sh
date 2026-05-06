@@ -65,7 +65,7 @@ proot-distro login "$DISTRO_NAME" -- bash -c '
     apt-get update -y
 
     echo "[INFO] Inside Ubuntu: Installing Python, browser, Node.js and runtime packages..."
-    apt-get install -y --fix-missing \
+    apt-get install -o Dpkg::Options::="--force-overwrite" -y --fix-missing \
         python3 python3-venv python3.13-venv python-is-python3 python3-pip git curl wget ffmpeg \
         libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
         libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2t64 libpango-1.0-0 libcairo2 \
@@ -98,7 +98,7 @@ proot-distro login "$DISTRO_NAME" -- bash -c '
     } > ~/.config/pip/pip.conf
 
     echo "[INFO] Upgrading pip..."
-    python3 -m pip install --upgrade pip setuptools wheel --break-system-packages || true
+    python3 -m pip install --upgrade --ignore-installed pip setuptools wheel --break-system-packages || true
 
     echo "[INFO] Installing EasyProxy requirements..."
     cd "$EP_DIR"
