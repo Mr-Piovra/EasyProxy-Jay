@@ -500,15 +500,6 @@
             </div>
         </div>
 
-        <div class="card" style="padding: var(--spacing-md);">
-            <div class="card-header" style="margin-bottom: var(--spacing-sm);">
-                <h2 class="card-title" style="font-size: 1.1rem;">System Resources</h2>
-            </div>
-            <div style="height: 250px; width: 100%;">
-                <canvas id="sysChart"></canvas>
-            </div>
-        </div>
-
         <div class="card">
             <div class="card-header">
                 <h2 class="card-title">Start New Recording</h2>
@@ -579,7 +570,6 @@
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
         const API_PASSWORD = new URLSearchParams(window.location.search).get('api_password') || '';
         let deleteRecordingId = null;
@@ -842,89 +832,7 @@
             }
         }
 
-        // Initialize Chart.js
-        const ctx = document.getElementById('sysChart').getContext('2d');
-        const sysChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [
-                    {
-                        label: 'CPU (%)',
-                        borderColor: '#6366f1',
-                        backgroundColor: 'rgba(99, 102, 241, 0.1)',
-                        data: [],
-                        tension: 0.4,
-                        fill: true,
-                        yAxisID: 'y'
-                    },
-                    {
-                        label: 'RAM (%)',
-                        borderColor: '#10b981',
-                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                        data: [],
-                        tension: 0.4,
-                        fill: true,
-                        yAxisID: 'y'
-                    },
-                    {
-                        label: 'Net Down (KB/s)',
-                        borderColor: '#39ff14',
-                        backgroundColor: 'transparent',
-                        data: [],
-                        tension: 0.4,
-                        borderDash: [5, 5],
-                        yAxisID: 'y1'
-                    },
-                    {
-                        label: 'Net Up (KB/s)',
-                        borderColor: '#ef4444',
-                        backgroundColor: 'transparent',
-                        data: [],
-                        tension: 0.4,
-                        borderDash: [5, 5],
-                        yAxisID: 'y1'
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                color: '#a1a1aa',
-                interaction: {
-                    mode: 'index',
-                    intersect: false,
-                },
-                scales: {
-                    x: {
-                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
-                        ticks: { color: '#71717a' }
-                    },
-                    y: {
-                        type: 'linear',
-                        display: true,
-                        position: 'left',
-                        min: 0,
-                        max: 100,
-                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
-                        ticks: { color: '#71717a', callback: function(value) { return value + '%' } }
-                    },
-                    y1: {
-                        type: 'linear',
-                        display: true,
-                        position: 'right',
-                        min: 0,
-                        grid: { drawOnChartArea: false },
-                        ticks: { color: '#71717a', callback: function(value) { return value + ' KB/s' } }
-                    }
-                },
-                plugins: {
-                    legend: { labels: { color: '#a1a1aa' } }
-                }
-            }
-        });
-
-        async function updateStats() {
+        async function fetchAppVersion() {
             try {
                 const response = await fetch(`/api/system_stats${getAuthParams()}`, {
                     headers: getAuthHeaders()
@@ -932,32 +840,11 @@
                 if (!response.ok) return;
                 const stats = await response.json();
 
-                // Update version
                 if (stats.version) {
                     document.getElementById('appVersion').textContent = stats.version;
                 }
-
-                const now = new Date();
-                const timeStr = now.getHours().toString().padStart(2, '0') + ':' + 
-                              now.getMinutes().toString().padStart(2, '0') + ':' + 
-                              now.getSeconds().toString().padStart(2, '0');
-
-                // Add data
-                sysChart.data.labels.push(timeStr);
-                sysChart.data.datasets[0].data.push(stats.cpu_percent);
-                sysChart.data.datasets[1].data.push(stats.ram_percent);
-                sysChart.data.datasets[2].data.push(stats.net_down_kbps);
-                sysChart.data.datasets[3].data.push(stats.net_up_kbps);
-
-                // Keep last 30 points
-                if (sysChart.data.labels.length > 30) {
-                    sysChart.data.labels.shift();
-                    sysChart.data.datasets.forEach(ds => ds.data.shift());
-                }
-
-                sysChart.update('none'); // Update without full animation for performance
             } catch (e) {
-                console.error('Failed to fetch stats:', e);
+                console.error('Failed to fetch version:', e);
             }
         }
 
@@ -968,9 +855,8 @@
 
         // Initial load
         loadRecordings();
-        updateStats();
+        fetchAppVersion();
         setInterval(loadRecordings, 5000);
-        setInterval(updateStats, 2000);
     </script>
 </body>
 </html>
