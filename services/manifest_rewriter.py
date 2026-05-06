@@ -594,10 +594,8 @@ class ManifestRewriter:
                 rewritten_lines.append(line)
 
                 # INJECTION: Ottimizzazione "Polmone" (Anti-Stuttering iniziale) per le dirette
-                # Inseriamo un offset temporale negativo subito dopo il TARGETDURATION.
-                if line.startswith("#EXT-X-TARGETDURATION:") and is_live_stream:
-                    # -15.0 secondi: allontana il player dal "live edge", dandogli un buffer
-                    # di 15s (circa 3-5 segmenti) che assorbe completamente la latenza iniziale di proxy/fetch.
-                    rewritten_lines.append("#EXT-X-START:TIME-OFFSET=-15.0,PRECISE=YES")
+                # Attualmente disabilitato per testare l'avvio immediato (buffer 0)
+                # if line.startswith("#EXT-X-TARGETDURATION:") and is_live_stream:
+                #     rewritten_lines.append("#EXT-X-START:TIME-OFFSET=-15.0,PRECISE=YES")
 
         return "\n".join(rewritten_lines)
