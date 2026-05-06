@@ -57,10 +57,12 @@ proot-distro login "$DISTRO_NAME" -- bash -c '
     sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list || true
     sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list || true
 
-    echo "[INFO] Inside Ubuntu: Adding non-snap Chromium PPA..."
-    apt-get install -y software-properties-common || true
-    add-apt-repository -y ppa:xtradeb/apps || true
-
+    echo "[INFO] Inside Ubuntu: Adding non-snap Chromium PPA (Robust HTTP method)..."
+    apt-get install -y curl gnupg lsb-release
+    mkdir -p /etc/apt/keyrings
+    curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x82BB6851C64F6880" | gpg --dearmor -o /etc/apt/keyrings/xtradeb.gpg --yes || true
+    echo "deb [signed-by=/etc/apt/keyrings/xtradeb.gpg] http://ppa.launchpadcontent.net/xtradeb/apps/ubuntu $(lsb_release -cs) main" > /etc/apt/sources.list.d/xtradeb-apps.list
+    
     echo "[INFO] Inside Ubuntu: Updating packages..."
     apt-get update -y
 
@@ -176,8 +178,10 @@ echo "=================================================="
 
 if [ -f "/usr/bin/chromium" ]; then
     export CHROME_BIN="/usr/bin/chromium"
+    export CHROME_EXE_PATH="/usr/bin/chromium"
 elif [ -f "/usr/bin/chromium-browser" ]; then
     export CHROME_BIN="/usr/bin/chromium-browser"
+    export CHROME_EXE_PATH="/usr/bin/chromium-browser"
 fi
 
 export CHROME_EXE_PATH="${CHROME_BIN:-}"
