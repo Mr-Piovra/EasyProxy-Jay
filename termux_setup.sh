@@ -97,8 +97,8 @@ proot-distro login "$DISTRO_NAME" -- bash -c '
         echo "break-system-packages = true"
     } > ~/.config/pip/pip.conf
 
-    echo "[INFO] Upgrading pip..."
-    python3 -m pip install --upgrade --ignore-installed pip setuptools wheel --break-system-packages || true
+    echo "[INFO] Ensuring pip and setuptools are intact..."
+    apt-get install -y --reinstall python3-pip python3-setuptools python3-wheel || true
 
     echo "[INFO] Installing EasyProxy requirements..."
     cd "$EP_DIR"
