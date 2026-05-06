@@ -3,7 +3,8 @@ import logging
 import os
 from aiohttp import web
 
-from config import check_password
+from config import check_password, APP_VERSION
+from services.system_monitor import monitor
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,24 @@ def setup_recording_routes(app, recording_manager):
             "recordings": recordings,
             "active_count": len([r for r in recordings if r.get('is_active')])
         })
+        
+    async def handle_system_stats(request):
+        """GET /api/system_stats - Get system resources usage."""
+        if not check_password(request):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+            
+        stats = monitor.get_stats()
+        
+        # Add git commit hash if available, otherwise just version
+        try:
+            commit = os.popen('git rev-parse --short HEAD').read().strip()
+            version_str = f"v{APP_VERSION}-{commit}" if commit else f"v{APP_VERSION}"
+        except:
+            version_str = f"v{APP_VERSION}"
+            
+        stats["version"] = version_str
+            
+        return web.json_response(stats)
 
     async def handle_get_recording(request):
         """GET /api/recordings/{id} - Get a specific recording."""
@@ -424,6 +443,7 @@ def setup_recording_routes(app, recording_manager):
     app.router.add_get('/record/stop/{id}', handle_stop_and_stream)  # Stop recording and stream
     app.router.add_get('/api/recordings', handle_list_recordings)
     app.router.add_get('/api/recordings/active', handle_active_recordings)
+    app.router.add_get('/api/system_stats', handle_system_stats)
     app.router.add_post('/api/recordings/start', handle_start_recording)
     app.router.add_delete('/api/recordings/all', handle_delete_all_recordings)
     app.router.add_get('/api/recordings/{id}', handle_get_recording)
