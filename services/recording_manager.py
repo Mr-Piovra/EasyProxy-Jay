@@ -512,18 +512,21 @@ class RecordingManager:
             output_path = input_path + '.mp4'
             
         # Mi 9 Lite (Snapdragon 710): libx265 is CPU-heavy. 
-        # preset ultrafast + crf 28 is the best balance for mobile.
+        # Switching to libx264 with ultrafast preset for much faster encoding while still saving space.
         cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "warning", "-y",
+            "ffmpeg", "-hide_banner", "-y",
             "-i", input_path,
-            "-c:v", "libx265",
+            "-c:v", "libx264",
             "-preset", "ultrafast",
             "-crf", "28",
             "-c:a", "copy",  # Audio is usually AAC/mp2 already, no need to transcode
+            "-progress", "pipe:1",
             output_path
         ]
         
-        logger.info(f"🔄 Transcoding {recording_id} to HEVC...")
+        logger.info(f"🔄 Transcoding {recording_id} to H.264...")
+        self.db.update_recording_status(recording_id, 'transcoding (0%)')
+        
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -531,7 +534,37 @@ class RecordingManager:
                 stderr=asyncio.subprocess.PIPE
             )
             
-            _, stderr = await process.communicate()
+            # Read stderr concurrently to prevent deadlock
+            stderr_chunks = []
+            async def read_stderr():
+                async for line in process.stderr:
+                    stderr_chunks.append(line)
+                    
+            stderr_task = asyncio.create_task(read_stderr())
+            
+            total_duration = recording.get('duration_seconds', 0) or 0
+            last_percent = -1
+            
+            # Parse progress from stdout
+            async for line in process.stdout:
+                line_str = line.decode(errors='replace').strip()
+                if line_str.startswith("out_time_ms="):
+                    try:
+                        out_time_us = int(line_str.split("=")[1])
+                        out_time_s = out_time_us / 1000000.0
+                        if total_duration > 0:
+                            percent = min(100, int((out_time_s / total_duration) * 100))
+                            if percent > last_percent and percent % 5 == 0:  # Update DB every 5%
+                                last_percent = percent
+                                self.db.update_recording_status(recording_id, f'transcoding ({percent}%)')
+                                if percent % 25 == 0:  # Log every 25%
+                                    logger.info(f"🔄 Transcoding {recording_id}: {percent}%")
+                    except ValueError:
+                        pass
+                        
+            await process.wait()
+            await stderr_task
+            stderr = b"".join(stderr_chunks)
             
             if process.returncode == 0 and os.path.exists(output_path):
                 try:
@@ -556,7 +589,7 @@ class RecordingManager:
                 except FileNotFoundError:
                     logger.warning(f"⚠️ Files modified during transcoding for {recording_id}, skipping finalization.")
             else:
-                stderr_text = stderr.decode() if stderr else "Unknown error"
+                stderr_text = stderr.decode(errors='replace') if stderr else "Unknown error"
                 logger.error(f"❌ Transcoding failed for {recording_id}: {stderr_text[:500]}")
                 # Revert to completed with original file
                 if os.path.exists(output_path):

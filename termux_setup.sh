@@ -64,6 +64,12 @@ proot-distro login "$DISTRO_NAME" -- bash -c '
     echo "[INFO] Inside Ubuntu: Updating packages..."
     apt-get update -y
 
+    echo "[INFO] Inside Ubuntu: Setting Timezone..."
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y tzdata
+    ln -snf /usr/share/zoneinfo/Europe/Rome /etc/localtime
+    echo "Europe/Rome" > /etc/timezone
+
     echo "[INFO] Inside Ubuntu: Installing Python, browser, Node.js and runtime packages..."
     apt-get install -o Dpkg::Options::="--force-overwrite" -y --fix-missing \
         python3 python3-venv python3.13-venv python-is-python3 python3-pip git curl wget ffmpeg \

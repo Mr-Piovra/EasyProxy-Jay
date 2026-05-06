@@ -622,13 +622,17 @@
             if (isActive) {
                 return '<span class="status-badge status-recording">Recording</span>';
             }
+            let baseStatus = status;
+            if (status.startsWith('transcoding')) {
+                baseStatus = 'transcoding';
+            }
             const statusClasses = {
                 'completed': 'status-completed',
                 'stopped': 'status-stopped',
                 'failed': 'status-failed',
                 'transcoding': 'status-transcoding'
             };
-            return `<span class="status-badge ${statusClasses[status] || ''}">${status}</span>`;
+            return `<span class="status-badge ${statusClasses[baseStatus] || ''}">${status}</span>`;
         }
 
         async function loadRecordings() {
