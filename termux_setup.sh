@@ -58,10 +58,9 @@ proot-distro login "$DISTRO_NAME" -- bash -c '
     sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list || true
 
     echo "[INFO] Inside Ubuntu: Adding non-snap Chromium PPA (Robust HTTP method)..."
-    apt-get install -y curl gnupg lsb-release
-    mkdir -p /etc/apt/keyrings
-    curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x82BB6851C64F6880" | gpg --dearmor -o /etc/apt/keyrings/xtradeb.gpg --yes || true
-    echo "deb [signed-by=/etc/apt/keyrings/xtradeb.gpg] http://ppa.launchpadcontent.net/xtradeb/apps/ubuntu $(lsb_release -cs) main" > /etc/apt/sources.list.d/xtradeb-apps.list
+    apt-get install -y lsb-release
+    rm -f /etc/apt/sources.list.d/xtradeb*
+    echo "deb [trusted=yes] http://ppa.launchpadcontent.net/xtradeb/apps/ubuntu $(lsb_release -cs) main" > /etc/apt/sources.list.d/xtradeb.list
     
     echo "[INFO] Inside Ubuntu: Updating packages..."
     apt-get update -y
