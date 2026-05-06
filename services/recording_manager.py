@@ -49,12 +49,13 @@ class RecordingManager:
         self.recordings_dir = recordings_dir
         self.max_duration = max_duration
         self.retention_days = retention_days
+
+        if not os.path.exists(self.recordings_dir):
+            os.makedirs(self.recordings_dir, exist_ok=True)
+
         self.db = RecordingDB(recordings_dir)
         self.processes: Dict[str, asyncio.subprocess.Process] = {}
         self.start_times: Dict[str, float] = {}
-
-        if not os.path.exists(self.recordings_dir):
-            os.makedirs(self.recordings_dir)
 
     # =========================================================================
     # Stream Type Detection
@@ -479,10 +480,13 @@ class RecordingManager:
             recording = self.db.get_recording(recording_id)
             if recording and recording.get('file_path'):
                 file_path = recording['file_path']
-                if os.path.exists(file_path):
-                    rec_duration = int(time.time() - self.start_times.get(recording_id, time.time()))
-                    file_size = os.path.getsize(file_path)
-                    self.db.update_recording_file_info(recording_id, rec_duration, file_size)
+                try:
+                    if os.path.exists(file_path):
+                        rec_duration = int(time.time() - self.start_times.get(recording_id, time.time()))
+                        file_size = os.path.getsize(file_path)
+                        self.db.update_recording_file_info(recording_id, rec_duration, file_size)
+                except FileNotFoundError:
+                    pass
 
         except asyncio.CancelledError:
             pass
@@ -530,23 +534,27 @@ class RecordingManager:
             _, stderr = await process.communicate()
             
             if process.returncode == 0 and os.path.exists(output_path):
-                original_size = os.path.getsize(input_path)
-                new_size = os.path.getsize(output_path)
-                
-                # Replace old file
-                os.remove(input_path)
-                
-                # Update DB
-                with self.db._get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        UPDATE recordings
-                        SET file_path = ?, file_size_bytes = ?, status = 'completed'
-                        WHERE id = ?
-                    """, (output_path, new_size, recording_id))
-                
-                saved_percent = int(100 - (new_size / max(original_size, 1)) * 100)
-                logger.info(f"✅ Transcoding {recording_id} finished. Saved ~{saved_percent}% space.")
+                try:
+                    original_size = os.path.getsize(input_path) if os.path.exists(input_path) else 1
+                    new_size = os.path.getsize(output_path)
+                    
+                    # Replace old file
+                    if os.path.exists(input_path):
+                        os.remove(input_path)
+                    
+                    # Update DB
+                    with self.db._get_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            UPDATE recordings
+                            SET file_path = ?, file_size_bytes = ?, status = 'completed'
+                            WHERE id = ?
+                        """, (output_path, new_size, recording_id))
+                    
+                    saved_percent = int(100 - (new_size / max(original_size, 1)) * 100)
+                    logger.info(f"✅ Transcoding {recording_id} finished. Saved ~{saved_percent}% space.")
+                except FileNotFoundError:
+                    logger.warning(f"⚠️ Files modified during transcoding for {recording_id}, skipping finalization.")
             else:
                 stderr_text = stderr.decode() if stderr else "Unknown error"
                 logger.error(f"❌ Transcoding failed for {recording_id}: {stderr_text[:500]}")

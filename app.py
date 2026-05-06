@@ -16,12 +16,6 @@ if DVR_ENABLED:
     from services.recording_manager import RecordingManager
     from routes.recordings import setup_recording_routes
 
-# Configurazione logging (già configurata in config.py ma utile per il main)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
-)
-
 logger = logging.getLogger(__name__)
 
 # --- Logica di Avvio ---

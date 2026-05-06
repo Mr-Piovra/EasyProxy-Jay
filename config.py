@@ -12,8 +12,10 @@ SELECTED_PROXY_CONTEXT = contextvars.ContextVar("selected_proxy", default=None)
 
 load_dotenv()
 
+from utils.logger import setup_logger
+
 # --- Log Level Configuration ---
-LOG_LEVEL_STR = os.environ.get("LOG_LEVEL", "WARNING").upper()
+LOG_LEVEL_STR = os.environ.get("LOG_LEVEL", "INFO").upper()
 LOG_LEVEL_MAP = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
@@ -21,23 +23,11 @@ LOG_LEVEL_MAP = {
     "ERROR": logging.ERROR,
     "CRITICAL": logging.CRITICAL,
 }
-LOG_LEVEL = LOG_LEVEL_MAP.get(LOG_LEVEL_STR, logging.WARNING)
+LOG_LEVEL = LOG_LEVEL_MAP.get(LOG_LEVEL_STR, logging.INFO)
 
-logging.basicConfig(
-    level=LOG_LEVEL,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
-
-
-class AsyncioWarningFilter(logging.Filter):
-    def filter(self, record):
-        return "Unknown child process pid" not in record.getMessage()
-
-
-logging.getLogger("asyncio").addFilter(AsyncioWarningFilter())
+setup_logger(LOG_LEVEL)
 
 logger = logging.getLogger(__name__)
-logger.setLevel(LOG_LEVEL)
 
 
 def parse_proxies(proxy_env_var: str) -> list:

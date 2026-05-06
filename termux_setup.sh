@@ -120,7 +120,7 @@ proot-distro login "$DISTRO_NAME" -- bash -c '
     python3 -m pip install --no-cache-dir --ignore-installed -r requirements.txt --break-system-packages || true
 
     echo "[INFO] Installing critical dependencies..."
-    python3 -m pip install --no-cache-dir --ignore-installed uvicorn prometheus-client certifi --break-system-packages || true
+    python3 -m pip install --no-cache-dir --ignore-installed uvicorn prometheus-client certifi bottle --break-system-packages || true
 
     if [ ! -f "$EP_DIR/.env" ]; then
         {
@@ -148,6 +148,12 @@ LOG_DIR="/root/.easyproxy"
 LOG_FILE="$LOG_DIR/easyproxy.log"
 
 mkdir -p "$LOG_DIR"
+
+if [ -f "$LOG_FILE" ]; then
+    tail -n 1000 "$LOG_FILE" > "$LOG_FILE.tmp"
+    mv "$LOG_FILE.tmp" "$LOG_FILE"
+fi
+
 touch "$LOG_FILE"
 exec >>"$LOG_FILE" 2>&1
 
@@ -295,20 +301,17 @@ chmod +x "$PREFIX/bin/easyproxy-stop"
 
 cat > "$PREFIX/bin/easyproxy-logs" << 'LOGS_EOF'
 #!/data/data/com.termux/files/usr/bin/bash
-LOG_DIR="$HOME/.easyproxy"
-echo "Opening logs... (Press Ctrl+A then D to exit logs without stopping)"
-if screen -list | grep -q "[.]easyproxy[[:space:]]"; then
-    screen -r easyproxy
-    exit 0
-fi
+echo "Opening live logs... (Press Ctrl+C to exit logs without stopping the proxy)"
+echo ""
 
-echo "No active screen session found. Showing saved logs instead."
-echo ""
-echo "--- Termux / screen log ---"
-tail -n 80 "$LOG_DIR/screen.log" 2>/dev/null || echo "No Termux log found."
-echo ""
-echo "--- Ubuntu bootstrap log ---"
-proot-distro login ubuntu -- bash -lc 'tail -n 120 /root/.easyproxy/easyproxy.log 2>/dev/null || echo "No Ubuntu log found."' 2>/dev/null || true
+proot-distro login ubuntu -- bash -c '
+    LOG_FILE="/root/.easyproxy/easyproxy.log"
+    if [ ! -f "$LOG_FILE" ]; then
+        echo "No logs found yet. EasyProxy might still be starting..."
+        exit 0
+    fi
+    tail -n 100 -f "$LOG_FILE"
+'
 LOGS_EOF
 chmod +x "$PREFIX/bin/easyproxy-logs"
 
