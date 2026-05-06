@@ -19,7 +19,7 @@ class ColoredFormatter(logging.Formatter):
         level_color = getattr(Colors, record.levelname, Colors.RESET)
         
         # Colorize components
-        time_str = f"{Colors.TIME}%(asctime)s{Colors.RESET}"
+        time_str = f"{Colors.TIME}%(asctime)s.%(msecs)03d{Colors.RESET}"
         level_str = f"{level_color}%(levelname)-8s{Colors.RESET}"
         name_str = f"{Colors.NAME}%(name)-15s{Colors.RESET}"
         
