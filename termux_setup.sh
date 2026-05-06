@@ -79,6 +79,8 @@ proot-distro login "$DISTRO_NAME" -- bash -c '
         libatspi2.0-0 fonts-liberation ca-certificates chromium chromium-driver procps \
         libxshmfence1 libglu1-mesa libx11-xcb1 libxcb-dri3-0 libxss1 libxtst6 libxslt1.1 || true
 
+    rm -f /usr/bin/chromium-browser /bin/chromium-browser
+
     if ! command -v pip >/dev/null 2>&1 && ! python3 -m pip --version >/dev/null 2>&1; then
         echo "[INFO] Inside Ubuntu: Apt pip missing, installing manually..."
         curl -sS https://bootstrap.pypa.io/get-pip.py | python3 - --break-system-packages || true
