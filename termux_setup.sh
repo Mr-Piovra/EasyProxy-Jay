@@ -57,10 +57,10 @@ proot-distro login "$DISTRO_NAME" -- bash -c '
     sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list || true
     sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list || true
 
-    echo "[INFO] Inside Ubuntu: Adding non-snap Chromium PPA (Robust HTTP method)..."
-    apt-get install -y lsb-release
-    rm -f /etc/apt/sources.list.d/xtradeb*
-    echo "deb [trusted=yes] http://ppa.launchpadcontent.net/xtradeb/apps/ubuntu $(lsb_release -cs) main" > /etc/apt/sources.list.d/xtradeb.list
+    echo "[INFO] Inside Ubuntu: Adding non-snap Chromium PPA..."
+    rm -f /etc/apt/sources.list.d/xtradeb.list
+    apt-get install -y software-properties-common || true
+    add-apt-repository -y ppa:xtradeb/apps || true
     
     echo "[INFO] Inside Ubuntu: Updating packages..."
     apt-get update -y
