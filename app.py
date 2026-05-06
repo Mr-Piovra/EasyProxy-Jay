@@ -120,13 +120,6 @@ def create_app():
         if hasattr(app, 'ffmpeg_manager'):
              app.ffmpeg_manager.touch_stream(stream_id)
         
-        if not os.path.exists(file_path):
-            return web.Response(status=404, text="Segment not found")
-            
-        # Notify manager to keep stream alive
-        if hasattr(app, 'ffmpeg_manager'):
-             app.ffmpeg_manager.touch_stream(stream_id)
-        
         headers = {
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",

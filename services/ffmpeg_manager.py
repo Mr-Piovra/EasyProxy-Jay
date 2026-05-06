@@ -186,23 +186,18 @@ class FFmpegManager:
             # Wait for the playlist to appear (up to 30 seconds)
             for _ in range(300):  # Wait up to 30 seconds
                 if os.path.exists(playlist_path):
-                    log_file.close()
                     break
                 # Check if process died
                 if process.returncode is not None:
                     stdout, stderr = await process.communicate()
                     log_file.write(f"STDERR: {stderr.decode()}\n")
                     log_file.write(f"STDOUT: {stdout.decode()}\n")
-                    log_file.close()
                     logger.error(f"FFmpeg process died. Stderr: {stderr.decode()[:500]}")
                     return None
                 await asyncio.sleep(0.1)
-            else:
-                log_file.close()
             
             if not os.path.exists(playlist_path):
                  logger.error("Timeout waiting for playlist generation")
-                 # Kill process?
                  try:
                      process.terminate()
                  except Exception:
@@ -214,6 +209,10 @@ class FFmpegManager:
         except Exception as e:
             logger.error(f"Failed to start FFmpeg: {e}")
             return None
+        finally:
+            # ✅ FIX: Garantisce la chiusura del log file anche in caso di eccezione
+            if not log_file.closed:
+                log_file.close()
 
     async def cleanup_loop(self):
         """Periodically checks and terminates idle streams."""

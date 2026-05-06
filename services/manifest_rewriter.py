@@ -408,6 +408,9 @@ class ManifestRewriter:
         base_parsed = urllib.parse.urlparse(base_url)
         base_query = base_parsed.query
 
+        # ✅ OPT: Precomputa una sola volta invece di fare string search su ogni riga del loop (O(n²))
+        is_live_stream = "#EXT-X-ENDLIST" not in manifest_content and "#EXT-X-START:" not in manifest_content
+
         for line in lines:
             line = line.strip()
 
@@ -589,14 +592,10 @@ class ManifestRewriter:
             else:
                 # Tutti gli altri tag (es. #EXTINF, #EXT-X-ENDLIST)
                 rewritten_lines.append(line)
-                
+
                 # INJECTION: Ottimizzazione "Polmone" (Anti-Stuttering iniziale) per le dirette
                 # Inseriamo un offset temporale negativo subito dopo il TARGETDURATION.
-                if (
-                    line.startswith("#EXT-X-TARGETDURATION:") 
-                    and "#EXT-X-ENDLIST" not in manifest_content 
-                    and "#EXT-X-START:" not in manifest_content
-                ):
+                if line.startswith("#EXT-X-TARGETDURATION:") and is_live_stream:
                     # -6.0 secondi ≈ 2 segmenti da 3s: dà al player un buffer iniziale
                     # sufficiente per evitare lo stutter senza introdurre un ritardo percepibile.
                     rewritten_lines.append("#EXT-X-START:TIME-OFFSET=-6.0,PRECISE=YES")

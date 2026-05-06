@@ -365,6 +365,13 @@ class HLSProxy:
         # Prefetch queue for background downloading
         self.prefetch_tasks = set()
 
+        # ✅ OPT: Segment coalescing — evita download multipli dello stesso segmento
+        # quando più client (o DVR) guardano lo stesso canale in contemporanea.
+        # in_flight_segments: url_key -> asyncio.Event (segnala quando il download è completo)
+        # in_flight_segment_data: url_key -> (status, headers_dict, body_bytes) | Exception
+        self.in_flight_segments: dict = {}
+        self.in_flight_segment_data: dict = {}
+
         # Sessione condivisa per il proxy (no proxy)
         self.session = None
         self.flex_session = None
@@ -373,6 +380,11 @@ class HLSProxy:
         # Distinta da captured_hls_manifest_map (quella è per manifesti catturati dagli estrattori)
         # Questa opera su manifesti raw fetchati in _proxy_stream
         self.manifest_cache = {}   # cache_key -> (rewritten_text, expires_at)
+
+        # ✅ OPT: Key cache — evita fetch upstream ripetuti della stessa chiave AES-128.
+        # Le chiavi AES-128 sono 16 byte fissi che non cambiano durante una sessione di streaming.
+        # Struttura: key_url -> (key_bytes: bytes, expires_at: float)
+        self.key_cache: dict = {}
 
         # Registry for HLS URL shortening (to handle extremely long multi-path URLs)
         # url_id -> (actual_url, timestamp, ttl)
@@ -452,7 +464,10 @@ class HLSProxy:
         ):
             async def refresh_loop():
                 while url_id in self.captured_hls_manifest_map:
-                    await asyncio.sleep(2)
+                    # ✅ OPT: 10s invece di 2s — ogni 2s era eccessivo su mobile (90+ call/min
+                    # con 3 stream attivi). Il manifest catturato dura 30s (TTL), rinnovarlo
+                    # ogni 10s è ancora 3x prima della scadenza: nessun impatto sulla fluidità.
+                    await asyncio.sleep(10)
                     entry = self.captured_hls_manifest_map.get(url_id)
                     if not entry:
                         break
@@ -2764,8 +2779,12 @@ class HLSProxy:
                     or headers.get("User-Agent")
                     or headers.get("user-agent")
                 )
-                nonce_result = self._compute_key_headers(
-                    key_url, secret_key, user_agent
+                # ✅ OPT: _compute_key_headers esegue fino a 100.000 iterazioni MD5 (proof-of-work).
+                # Spostato su run_in_executor per evitare di bloccare l'event loop per 50-150ms
+                # sul CPU mobile del Mi 9 Lite.
+                loop = asyncio.get_event_loop()
+                nonce_result = await loop.run_in_executor(
+                    None, self._compute_key_headers, key_url, secret_key, user_agent
                 )
                 if nonce_result:
                     ts, nonce, fingerprint, key_path = nonce_result
@@ -2792,6 +2811,25 @@ class HLSProxy:
                     f"🔐 Auth key headers: Authorization={'***' if headers.get('Authorization') else 'missing'}, X-Channel-Key={headers.get('X-Channel-Key', 'missing')}, X-User-Agent={headers.get('X-User-Agent', 'missing')}"
                 )
 
+            # ✅ OPT: Key cache — serve la chiave AES-128 dalla cache locale se disponibile.
+            # Solo per chiavi valide (16 byte). Le chiavi DLStreams e static escono prima.
+            _key_cache_entry = self.key_cache.get(key_url)
+            if _key_cache_entry:
+                _cached_bytes, _key_expires_at = _key_cache_entry
+                if time.time() < _key_expires_at:
+                    logger.debug(f"🔑 [Key Cache] HIT: {key_url.split('/')[-1]}")
+                    return web.Response(
+                        body=_cached_bytes,
+                        content_type="application/octet-stream",
+                        headers={
+                            "Access-Control-Allow-Origin": "*",
+                            "Access-Control-Allow-Headers": "*",
+                            "Cache-Control": "no-cache, no-store, must-revalidate",
+                        },
+                    )
+                else:
+                    self.key_cache.pop(key_url, None)
+
             disable_ssl = get_ssl_setting_for_url(key_url, TRANSPORT_ROUTES)
             async with session.get(key_url, headers=headers, ssl=not disable_ssl, allow_redirects=True, timeout=15) as resp:
                 if resp.status == 200 or resp.status == 206:
@@ -2799,6 +2837,11 @@ class HLSProxy:
                     logger.debug(
                         f"✅ AES key fetched successfully: {len(key_data)} bytes"
                     )
+                    # ✅ OPT: Metti in cache solo chiavi AES valide (esattamente 16 byte).
+                    # TTL 30s: la chiave non ruota mai nell'arco di un segmento (2-6s).
+                    if len(key_data) == 16:
+                        self.key_cache[key_url] = (key_data, time.time() + 30.0)
+                        logger.debug(f"🔑 [Key Cache] STORED: {key_url.split('/')[-1]}")
 
                     # Warn if key size is unexpected (AES-128 = 16 bytes)
                     if len(key_data) != 16 and is_dlstreams_key:
@@ -2881,16 +2924,15 @@ class HLSProxy:
             return web.Response(text=f"Segment error: {str(e)}", status=500)
 
     async def _proxy_segment(self, request, segment_url, stream_headers, segment_name):
-        """✅ NUOVO: Proxy dedicato per segmenti .ts con Content-Disposition"""
+        """✅ NUOVO: Proxy dedicato per segmenti .ts con segment coalescing e Content-Disposition"""
         try:
             # Ping DLStreams extractor to keep browser alive during playback
-            # Use robust markers: Daddy's domains, 'premium' pattern, 'mono.css', or Referer/Origin headers
             is_dlstreams = any(m in segment_url for m in ["dlhd.dad", "dlstreams", "premium", "mono.css"])
             if not is_dlstreams:
                 ref = request.query.get("h_Referer", "") or request.headers.get("Referer", "")
                 origin = request.query.get("h_Origin", "") or request.headers.get("Origin", "")
                 is_dlstreams = any(m in (ref + origin).lower() for m in ["dlhd.dad", "dlstreams"])
-            
+
             if is_dlstreams:
                 ext = self.extractors.get("dlstreams")
                 if ext and hasattr(ext, "_update_shared_activity"):
@@ -2905,10 +2947,13 @@ class HLSProxy:
                     del target[key]
                 target[name] = value
 
-            # Passa attraverso alcuni headers del client
+            # Passa attraverso alcuni headers del client; rileva Range requests
+            has_range = False
             for header in ["range", "if-none-match", "if-modified-since"]:
                 if header in request.headers:
                     headers[header] = request.headers[header]
+                    if header == "range":
+                        has_range = True
 
             if is_cccdn_stream:
                 headers["Accept-Encoding"] = "identity"
@@ -2916,71 +2961,125 @@ class HLSProxy:
             # ✅ Use pooled session for better performance
             bypass_warp = request.query.get("warp", "").lower() == "off"
             forced_proxy = request.query.get("proxy") or None
-            
+
             session, _ = await self._get_proxy_session(
                 segment_url, bypass_warp=bypass_warp, forced_proxy=forced_proxy
             )
             disable_ssl = get_ssl_setting_for_url(segment_url, TRANSPORT_ROUTES)
             # ✅ Use yarl.URL with encoded=True to prevent double-encoding of commas
             final_segment_url = yarl.URL(segment_url, encoded=True)
-            async with session.get(final_segment_url, headers=headers, ssl=not disable_ssl) as resp:
-                response_headers = {}
 
-                for header in [
-                    "content-type",
-                    "content-range",
-                    "accept-ranges",
-                    "last-modified",
-                    "etag",
-                ]:
-                    if header in resp.headers:
-                        response_headers[header] = resp.headers[header]
+            # ✅ OPT: Segment coalescing — se un altro client sta già scaricando questo
+            # segmento, aspetta il suo risultato invece di aprire un secondo download upstream.
+            # Bypassato per Range requests (parziali, non condivisibili) e cccdn (gestione speciale).
+            coalesce_key = None if (has_range or is_cccdn_stream) else f"seg:{segment_url}"
 
-                # Forza il content-type e aggiunge Content-Disposition per .ts
-                set_response_header(response_headers, "Content-Type", "video/MP2T")
-                set_response_header(
-                    response_headers,
-                    "Content-Disposition",
-                    f'attachment; filename="{segment_name}"',
-                )
-                set_response_header(
-                    response_headers, "Access-Control-Allow-Origin", "*"
-                )
-                set_response_header(
-                    response_headers,
-                    "Access-Control-Allow-Methods",
-                    "GET, HEAD, OPTIONS",
-                )
-                set_response_header(
-                    response_headers,
-                    "Access-Control-Allow-Headers",
-                    "Range, Content-Type",
-                )
+            if coalesce_key:
+                if coalesce_key in self.in_flight_segments:
+                    # Un altro client sta scaricando — aspetta il suo asyncio.Event
+                    logger.debug(f"⏳ [Coalesce] Waiting for in-flight: {segment_name}")
+                    try:
+                        await asyncio.wait_for(
+                            self.in_flight_segments[coalesce_key].wait(), timeout=15.0
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(f"⚠️ [Coalesce] Timeout on {segment_name}, fallthrough to direct download")
+                        coalesce_key = None  # fallthrough al download diretto
+                    else:
+                        result = self.in_flight_segment_data.get(coalesce_key)
+                        if isinstance(result, tuple) and len(result) == 3:
+                            status, coalesced_headers, body = result
+                            logger.debug(f"✅ [Coalesce] Served from shared download: {segment_name}")
+                            return web.Response(body=body, status=status, headers=coalesced_headers)
+                        else:
+                            # Il primo download è fallito — prova da solo
+                            logger.debug(f"⚠️ [Coalesce] First download failed for {segment_name}, retrying independently")
+                            coalesce_key = None
+                else:
+                    # Siamo i primi — prenotiamo il posto con un Event non ancora settato
+                    self.in_flight_segments[coalesce_key] = asyncio.Event()
 
-                response = web.StreamResponse(status=resp.status, headers=response_headers)
-                await response.prepare(request)
+            try:
+                async with session.get(final_segment_url, headers=headers, ssl=not disable_ssl) as resp:
+                    response_headers = {}
 
-                first_chunk = True
-                try:
-                    async for chunk in resp.content.iter_any():
-                        if first_chunk:
-                            chunk = self._strip_fake_png_header_from_ts(chunk)
-                            first_chunk = False
-                        await response.write(chunk)
-                    await response.write_eof()
-                    return response
-                except (ClientPayloadError, ConnectionResetError, OSError) as e:
-                    logger.info(
-                        "Segment stream interrupted for %s [%s]: %s",
-                        segment_name,
-                        type(e).__name__,
-                        e,
+                    for header in [
+                        "content-type",
+                        "content-range",
+                        "accept-ranges",
+                        "last-modified",
+                        "etag",
+                    ]:
+                        if header in resp.headers:
+                            response_headers[header] = resp.headers[header]
+
+                    set_response_header(response_headers, "Content-Type", "video/MP2T")
+                    set_response_header(
+                        response_headers,
+                        "Content-Disposition",
+                        f'attachment; filename="{segment_name}"',
                     )
-                    return response
-                except Exception as e:
-                    if "Connection lost" not in str(e) and "closing transport" not in str(e):
-                        logger.error(f"Error streaming segment {segment_name}: {str(e)}")
-                    return response
+                    set_response_header(response_headers, "Access-Control-Allow-Origin", "*")
+                    set_response_header(response_headers, "Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+                    set_response_header(response_headers, "Access-Control-Allow-Headers", "Range, Content-Type")
+
+                    if coalesce_key:
+                        # Modalità coalescing: bufferizza l'intero segmento, poi notifica i waiter
+                        try:
+                            body = await resp.read()
+                            body = self._strip_fake_png_header_from_ts(body)
+                            self.in_flight_segment_data[coalesce_key] = (resp.status, response_headers, body)
+                            # Pulisce i dati bufferizzati dopo 5s (tutti i waiter li leggono in <1ms)
+                            async def _cleanup_coalesce(_key=coalesce_key):
+                                await asyncio.sleep(5)
+                                self.in_flight_segment_data.pop(_key, None)
+                            asyncio.create_task(_cleanup_coalesce())
+                            return web.Response(body=body, status=resp.status, headers=response_headers)
+                        except Exception as download_err:
+                            self.in_flight_segment_data[coalesce_key] = download_err
+                            raise
+                        finally:
+                            # Segnala SEMPRE i waiter — anche in caso di errore
+                            evt = self.in_flight_segments.pop(coalesce_key, None)
+                            if evt:
+                                evt.set()
+                    else:
+                        # Modalità streaming: Range requests o cccdn (percorso originale invariato)
+                        response = web.StreamResponse(status=resp.status, headers=response_headers)
+                        await response.prepare(request)
+
+                        first_chunk = True
+                        try:
+                            # ✅ OPT: iter_chunked(65536) per ridurre interrupt su event loop mobile
+                            async for chunk in resp.content.iter_chunked(65536):
+                                if first_chunk:
+                                    chunk = self._strip_fake_png_header_from_ts(chunk)
+                                    first_chunk = False
+                                await response.write(chunk)
+                            await response.write_eof()
+                            return response
+                        except (ClientPayloadError, ConnectionResetError, OSError) as e:
+                            logger.info(
+                                "Segment stream interrupted for %s [%s]: %s",
+                                segment_name,
+                                type(e).__name__,
+                                e,
+                            )
+                            return response
+                        except Exception as e:
+                            if "Connection lost" not in str(e) and "closing transport" not in str(e):
+                                logger.error(f"Error streaming segment {segment_name}: {str(e)}")
+                            return response
+
+            except Exception:
+                # Se eravamo il primo downloader e falliamo, sblocca i waiter
+                if coalesce_key and coalesce_key in self.in_flight_segments:
+                    if coalesce_key not in self.in_flight_segment_data:
+                        self.in_flight_segment_data[coalesce_key] = Exception("Download failed")
+                    evt = self.in_flight_segments.pop(coalesce_key, None)
+                    if evt:
+                        evt.set()
+                raise
 
         except Exception as e:
             logger.error(f"Error in segment proxy: {str(e)}")
@@ -3347,7 +3446,8 @@ class HLSProxy:
                     response = web.StreamResponse(status=resp.status, headers=response_headers)
                     await response.prepare(request)
                     try:
-                        async for chunk in resp.content.iter_any():
+                        # ✅ OPT: iter_chunked(65536) per ridurre interrupt su event loop mobile
+                        async for chunk in resp.content.iter_chunked(65536):
                             await response.write(chunk)
                         await response.write_eof()
                         return response
@@ -3425,15 +3525,53 @@ class HLSProxy:
                         disable_ssl=disable_ssl,
                         selected_proxy=forced_proxy, # ✅ PASSA IL PROXY FORZATO
                     )
-                    # ✅ OPT: Salva in cache con TTL 2s. Solo per manifest HLS (non MPD, non segmenti).
+                    # ✅ OPT: Salva in cache con TTL 4s. Solo per manifest HLS (non MPD, non segmenti).
                     # Pulizia lazy: rimuoviamo entry scadute ogni volta che ne aggiungiamo una nuova.
                     if not goto_manifest_processing and not is_cccdn_stream:
-                        _expire_at = time.time() + 2.0
+                        _expire_at = time.time() + 4.0
                         self.manifest_cache[_manifest_cache_key] = (rewritten, _expire_at)
                         # Pulizia lazy delle entry scadute (evita crescita illimitata)
                         _stale = [k for k, v in list(self.manifest_cache.items()) if time.time() > v[1]]
                         for k in _stale:
                             self.manifest_cache.pop(k, None)
+
+                    # ✅ OPT: Connection pre-warm — elimina il TCP slow start al cold start HLS.
+                    # Quando serviamo il manifest sappiamo già il dominio CDN dei segmenti (è lo
+                    # stesso dell'URL upstream). Apriamo in background una connessione HEAD verso
+                    # di esso: quando il player richiederà i segmenti pochi ms dopo, aiohttp
+                    # troverà la connessione già calda nel pool e salterà handshake + slow start.
+                    # Fire-and-forget: qualsiasi errore è silenzioso e non impatta il flusso.
+                    try:
+                        _cdn_parsed = urlparse(stream_url)
+                        _cdn_netloc = _cdn_parsed.netloc
+                        _cdn_base = f"{_cdn_parsed.scheme}://{_cdn_netloc}/"
+                        _prewarm_key = f"prewarm:{_cdn_netloc}:{session_proxy or 'direct'}"
+                        if _cdn_netloc and _prewarm_key not in self.prefetch_tasks:
+                            self.prefetch_tasks.add(_prewarm_key)
+                            async def _prewarm_connection(
+                                _base=_cdn_base,
+                                _sess=session,
+                                _ssl=disable_ssl,
+                                _hdrs={"User-Agent": headers.get("User-Agent", "Mozilla/5.0")},
+                                _key=_prewarm_key,
+                            ):
+                                try:
+                                    async with _sess.head(
+                                        _base,
+                                        headers=_hdrs,
+                                        ssl=not _ssl,
+                                        timeout=aiohttp.ClientTimeout(total=5, connect=3),
+                                        allow_redirects=False,
+                                    ):
+                                        pass
+                                    logger.debug(f"🔥 Pre-warmed TCP connection to {_base}")
+                                except Exception:
+                                    pass  # silenzioso: il pre-warm è best-effort
+                                finally:
+                                    self.prefetch_tasks.discard(_key)
+                            asyncio.create_task(_prewarm_connection())
+                    except Exception:
+                        pass  # il pre-warm non deve mai influenzare il flusso principale
 
                     return web.Response(text=rewritten, headers={
                         "Content-Type": "application/vnd.apple.mpegurl",
