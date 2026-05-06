@@ -120,7 +120,7 @@ proot-distro login "$DISTRO_NAME" -- bash -c '
     python3 -m pip install --no-cache-dir --ignore-installed -r requirements.txt --break-system-packages || true
 
     echo "[INFO] Installing critical dependencies..."
-    python3 -m pip install --no-cache-dir --ignore-installed uvicorn prometheus-client certifi bottle --break-system-packages || true
+    python3 -m pip install --no-cache-dir --ignore-installed uvicorn prometheus-client certifi bottle func_timeout --break-system-packages || true
 
     if [ ! -f "$EP_DIR/.env" ]; then
         {
