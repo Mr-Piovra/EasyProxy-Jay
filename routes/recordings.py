@@ -89,7 +89,7 @@ def setup_recording_routes(app, recording_manager):
 
         if duration:
             try:
-                duration = int(duration)
+                duration = int(duration) * 60
             except ValueError:
                 return web.json_response(
                     {"error": "Duration must be a number"}, status=400)
@@ -339,7 +339,7 @@ def setup_recording_routes(app, recording_manager):
 
         if duration:
             try:
-                duration = int(duration)
+                duration = int(duration) * 60
             except ValueError:
                 return web.json_response(
                     {"error": "Duration must be a number"}, status=400)

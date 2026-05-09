@@ -438,8 +438,6 @@ class RecordingManager:
                 except Exception as e:
                     logger.error(f"Error killing process {pid}: {e}")
 
-        self.db.update_recording_status(recording_id, 'stopped')
-
         if recording.get('file_path'):
             file_path = recording['file_path']
             if os.path.exists(file_path):
@@ -448,7 +446,18 @@ class RecordingManager:
                 file_size = os.path.getsize(file_path)
                 self.db.update_recording_file_info(recording_id, rec_duration, file_size)
 
-        logger.info(f"Recording {recording_id} stopped")
+                if file_path.endswith('.ts'):
+                    logger.info(f"Recording {recording_id} stopped. Starting remuxing to mp4...")
+                    self.db.update_recording_status(recording_id, 'remuxing')
+                    asyncio.create_task(self._remux_recording(recording_id))
+                else:
+                    self.db.update_recording_status(recording_id, 'stopped')
+            else:
+                self.db.update_recording_status(recording_id, 'stopped')
+        else:
+            self.db.update_recording_status(recording_id, 'stopped')
+
+        logger.info(f"Recording {recording_id} stop process finished")
         return True
 
     async def _monitor_recording(
@@ -469,9 +478,9 @@ class RecordingManager:
                 logger.debug(f"Recording {recording_id} FFmpeg output: {stderr_text[:1000]}")
 
             if process.returncode == 0:
-                logger.info(f"Recording {recording_id} completed successfully. Starting HEVC transcoding...")
-                self.db.update_recording_status(recording_id, 'transcoding')
-                asyncio.create_task(self._transcode_recording(recording_id))
+                logger.info(f"Recording {recording_id} completed successfully. Starting remuxing to mp4...")
+                self.db.update_recording_status(recording_id, 'remuxing')
+                asyncio.create_task(self._remux_recording(recording_id))
             else:
                 error_msg = stderr_text[:500] if stderr_text else "Unknown error"
                 logger.error(f"Recording {recording_id} failed with code {process.returncode}: {error_msg}")
@@ -496,36 +505,31 @@ class RecordingManager:
             self.processes.pop(recording_id, None)
             self.start_times.pop(recording_id, None)
 
-    async def _transcode_recording(self, recording_id: str):
-        """Offline background HEVC transcoding to save space on mobile."""
+    async def _remux_recording(self, recording_id: str):
+        """Offline background remuxing da .ts a .mp4 per ottenere una timeline funzionante (VLC/browser)."""
         recording = self.db.get_recording(recording_id)
         if not recording or not recording.get('file_path'):
             return
             
         input_path = recording['file_path']
         if not os.path.exists(input_path):
-            self.db.update_recording_status(recording_id, 'failed', "Original file missing for transcoding")
+            self.db.update_recording_status(recording_id, 'failed', "Original file missing for remuxing")
             return
             
         output_path = input_path.replace('.ts', '.mp4')
         if output_path == input_path:
             output_path = input_path + '.mp4'
             
-        # Mi 9 Lite (Snapdragon 710): libx265 is CPU-heavy. 
-        # Switching to libx264 with ultrafast preset for much faster encoding while still saving space.
         cmd = [
             "ffmpeg", "-hide_banner", "-y",
             "-i", input_path,
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-crf", "28",
-            "-c:a", "copy",  # Audio is usually AAC/mp2 already, no need to transcode
+            "-c", "copy",
             "-progress", "pipe:1",
             output_path
         ]
         
-        logger.info(f"🔄 Transcoding {recording_id} to H.264...")
-        self.db.update_recording_status(recording_id, 'transcoding (0%)')
+        logger.info(f"🔄 Remuxing {recording_id} to MP4...")
+        self.db.update_recording_status(recording_id, 'remuxing (0%)')
         
         try:
             process = await asyncio.create_subprocess_exec(
@@ -556,9 +560,9 @@ class RecordingManager:
                             percent = min(100, int((out_time_s / total_duration) * 100))
                             if percent > last_percent and percent % 5 == 0:  # Update DB every 5%
                                 last_percent = percent
-                                self.db.update_recording_status(recording_id, f'transcoding ({percent}%)')
+                                self.db.update_recording_status(recording_id, f'remuxing ({percent}%)')
                                 if percent % 25 == 0:  # Log every 25%
-                                    logger.info(f"🔄 Transcoding {recording_id}: {percent}%")
+                                    logger.info(f"🔄 Remuxing {recording_id}: {percent}%")
                     except ValueError:
                         pass
                         
@@ -568,7 +572,6 @@ class RecordingManager:
             
             if process.returncode == 0 and os.path.exists(output_path):
                 try:
-                    original_size = os.path.getsize(input_path) if os.path.exists(input_path) else 1
                     new_size = os.path.getsize(output_path)
                     
                     # Replace old file
@@ -584,21 +587,20 @@ class RecordingManager:
                             WHERE id = ?
                         """, (output_path, new_size, recording_id))
                     
-                    saved_percent = int(100 - (new_size / max(original_size, 1)) * 100)
-                    logger.info(f"✅ Transcoding {recording_id} finished. Saved ~{saved_percent}% space.")
+                    logger.info(f"✅ Remuxing {recording_id} finished. Timeline fixed.")
                 except FileNotFoundError:
-                    logger.warning(f"⚠️ Files modified during transcoding for {recording_id}, skipping finalization.")
+                    logger.warning(f"⚠️ Files modified during remuxing for {recording_id}, skipping finalization.")
             else:
                 stderr_text = stderr.decode(errors='replace') if stderr else "Unknown error"
-                logger.error(f"❌ Transcoding failed for {recording_id}: {stderr_text[:500]}")
+                logger.error(f"❌ Remuxing failed for {recording_id}: {stderr_text[:500]}")
                 # Revert to completed with original file
                 if os.path.exists(output_path):
                     os.remove(output_path)
-                self.db.update_recording_status(recording_id, 'completed', "Transcoding failed, kept original")
+                self.db.update_recording_status(recording_id, 'completed', "Remuxing failed, kept original")
                 
         except Exception as e:
-            logger.error(f"❌ Exception during transcoding {recording_id}: {e}")
-            self.db.update_recording_status(recording_id, 'completed', "Transcoding exception, kept original")
+            logger.error(f"❌ Exception during remuxing {recording_id}: {e}")
+            self.db.update_recording_status(recording_id, 'completed', "Remuxing exception, kept original")
 
     async def delete_recording(self, recording_id: str) -> bool:
         """Delete a recording and its file."""
