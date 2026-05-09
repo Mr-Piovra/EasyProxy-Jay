@@ -9,7 +9,7 @@ from services.system_monitor import monitor
 logger = logging.getLogger(__name__)
 
 
-def setup_recording_routes(app, recording_manager):
+def setup_recording_routes(app, recording_manager, tvvoo_manager=None):
     """Setup all recording-related routes."""
 
     async def handle_recordings_page(request):
@@ -437,6 +437,36 @@ def setup_recording_routes(app, recording_manager):
 
         raise web.HTTPFound(stream_url)
 
+    async def handle_tvvoo_channels(request):
+        """GET /api/tvvoo/channels - List Italian channels from TVVOO."""
+        if not check_password(request):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+        
+        if not tvvoo_manager:
+            return web.json_response({"error": "TvvooManager not initialized"}, status=501)
+            
+        force = request.query.get('force') == 'true'
+        channels = await tvvoo_manager.get_italian_channels(force_refresh=force)
+        return web.json_response({"channels": channels})
+
+    async def handle_tvvoo_resolve(request):
+        """GET /api/tvvoo/resolve - Resolve channel name to Vavoo URL."""
+        if not check_password(request):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+            
+        if not tvvoo_manager:
+            return web.json_response({"error": "TvvooManager not initialized"}, status=501)
+            
+        name = request.query.get('name')
+        if not name:
+            return web.json_response({"error": "Channel name is required"}, status=400)
+            
+        url = await tvvoo_manager.get_vavoo_url(name)
+        if not url:
+            return web.json_response({"error": f"Could not resolve URL for channel '{name}'"}, status=404)
+            
+        return web.json_response({"url": url})
+
     # Register routes
     app.router.add_get('/recordings', handle_recordings_page)
     app.router.add_get('/record', handle_record_via_get)  # GET endpoint for StreamVix
@@ -444,6 +474,11 @@ def setup_recording_routes(app, recording_manager):
     app.router.add_get('/api/recordings', handle_list_recordings)
     app.router.add_get('/api/recordings/active', handle_active_recordings)
     app.router.add_get('/api/system_stats', handle_system_stats)
+    
+    # TVVOO routes
+    app.router.add_get('/api/tvvoo/channels', handle_tvvoo_channels)
+    app.router.add_get('/api/tvvoo/resolve', handle_tvvoo_resolve)
+    
     app.router.add_post('/api/recordings/start', handle_start_recording)
     app.router.add_delete('/api/recordings/all', handle_delete_all_recordings)
     app.router.add_get('/api/recordings/{id}', handle_get_recording)

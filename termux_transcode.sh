@@ -23,7 +23,7 @@ if [ ! -d "$RECORDINGS_DIR" ]; then
     exit 1
 fi
 
-echo "Avvio controllo transcodifiche in $RECORDINGS_DIR (H264 Hardware @ 6Mbps)"
+echo "Avvio controllo transcodifiche in $RECORDINGS_DIR (H264 Hardware @ 4.5Mbps)"
 
 # Cerca tutti i file .ts e .mp4
 for SRC_FILE in "$RECORDINGS_DIR"/*.ts "$RECORDINGS_DIR"/*.mp4; do

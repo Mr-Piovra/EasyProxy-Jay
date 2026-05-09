@@ -14,6 +14,7 @@ from config import PORT, DVR_ENABLED, RECORDINGS_DIR, MAX_RECORDING_DURATION, RE
 # Only import DVR components if enabled
 if DVR_ENABLED:
     from services.recording_manager import RecordingManager
+    from services.tvvoo_manager import TvvooManager
     from routes.recordings import setup_recording_routes
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,9 @@ def create_app():
             retention_days=RECORDINGS_RETENTION_DAYS
         )
         app['recording_manager'] = recording_manager
+        
+        tvvoo_manager = TvvooManager()
+        app['tvvoo_manager'] = tvvoo_manager
     
     # Registra le route
     app.router.add_get('/', proxy.handle_root)
@@ -170,7 +174,7 @@ def create_app():
     app.router.add_get('/proxy/ip', proxy.handle_proxy_ip)
     # Setup recording/DVR routes (only if enabled)
     if DVR_ENABLED:
-        setup_recording_routes(app, recording_manager)
+        setup_recording_routes(app, recording_manager, tvvoo_manager)
     
     # Gestore OPTIONS generico per CORS
     app.router.add_route('OPTIONS', '/{tail:.*}', proxy.handle_options)
