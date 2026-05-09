@@ -25,7 +25,7 @@ class TvvooManager:
             async with aiohttp.ClientSession() as session:
                 async with session.get(self.github_url, timeout=10) as resp:
                     if resp.status == 200:
-                        data = await resp.json()
+                        data = await resp.json(content_type=None)
                         # Filter only Italy
                         italy_channels = [ch for ch in data if ch.get("country") == "Italy"]
                         # Sort alphabetically by name
