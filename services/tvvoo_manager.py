@@ -22,20 +22,32 @@ class TvvooManager:
             return self._cached_channels
             
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(self.github_url, timeout=10) as resp:
-                    if resp.status == 200:
-                        data = await resp.json(content_type=None)
-                        # Filter only Italy
-                        italy_channels = [ch for ch in data if ch.get("country") == "Italy"]
-                        # Sort alphabetically by name
-                        self._cached_channels = sorted(italy_channels, key=lambda x: x.get("name", ""))
-                        self._last_fetch_time = now
-                        logger.info(f"Fetched {len(self._cached_channels)} Italian channels from Tvvoo GitHub")
-                    else:
-                        logger.error(f"Failed to fetch tvvoo channels: HTTP {resp.status}")
+            catalog = await self._fetch_vavoo_catalog("Italy", force_refresh=force_refresh)
+            unique_names = set()
+            italy_channels = []
+            
+            for item in catalog:
+                raw_name = item.get("name", "")
+                if not raw_name:
+                    continue
+                    
+                clean_name = self._cleanup_channel_name(raw_name)
+                
+                # We only add the clean name once
+                if clean_name.lower() not in unique_names:
+                    unique_names.add(clean_name.lower())
+                    italy_channels.append({
+                        "name": clean_name,
+                        "original_name": raw_name
+                    })
+                    
+            # Sort alphabetically by name
+            self._cached_channels = sorted(italy_channels, key=lambda x: x.get("name", "").lower())
+            self._last_fetch_time = now
+            logger.info(f"Loaded {len(self._cached_channels)} unique Italian channels from Vavoo Catalog")
+            
         except Exception as e:
-            logger.error(f"Error fetching tvvoo channels: {e}")
+            logger.error(f"Error fetching tvvoo channels from catalog: {e}")
             
         return self._cached_channels
 
