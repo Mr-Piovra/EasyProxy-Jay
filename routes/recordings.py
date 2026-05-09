@@ -261,22 +261,44 @@ def setup_recording_routes(app, recording_manager, tvvoo_manager=None):
                 }
             )
 
-        # For active recordings: stream growing file with chunked transfer
-        response = web.StreamResponse(
-            status=200,
-            headers={
-                "Content-Type": content_type,
-                "Transfer-Encoding": "chunked",
-                "Access-Control-Allow-Origin": "*",
-                "Cache-Control": "no-cache"
-            }
-        )
+        # For active recordings: handle Range requests to support seeking while tailing
+        import re
+        range_header = request.headers.get('Range')
+        start_byte = 0
+        
+        if range_header:
+            match = re.search(r'bytes=(\d+)-', range_header)
+            if match:
+                start_byte = int(match.group(1))
+
+        file_size = os.path.getsize(file_path)
+        
+        headers = {
+            "Content-Type": content_type,
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-cache",
+            "Accept-Ranges": "bytes"
+        }
+        
+        if start_byte > 0:
+            status = 206
+            # Use * for unknown total size to allow open-ended streaming
+            headers["Content-Range"] = f"bytes {start_byte}-{max(start_byte, file_size-1)}/*"
+            headers["Transfer-Encoding"] = "chunked"
+        else:
+            status = 200
+            headers["Transfer-Encoding"] = "chunked"
+
+        response = web.StreamResponse(status=status, headers=headers)
         await response.prepare(request)
 
-        logger.debug(f"Starting live stream of active recording {recording_id}")
+        logger.debug(f"Starting live stream of active recording {recording_id} from byte {start_byte}")
 
         try:
             with open(file_path, 'rb') as f:
+                if start_byte > 0:
+                    f.seek(start_byte)
+                    
                 while True:
                     chunk = f.read(65536)  # 64KB chunks
                     if chunk:
@@ -292,7 +314,8 @@ def setup_recording_routes(app, recording_manager, tvvoo_manager=None):
         except ConnectionResetError:
             logger.debug(f"Client disconnected from recording {recording_id} stream")
         except Exception as e:
-            logger.warning(f"Error streaming recording {recording_id}: {e}")
+            if "Connection lost" not in str(e):
+                logger.warning(f"Error streaming recording {recording_id}: {e}")
 
         await response.write_eof()
         return response
