@@ -2113,7 +2113,29 @@ class HLSProxy:
                     )
 
             # Procedi con il proxy dello stream (passando l'eventuale bypass_warp attivato dall'estrattore e il proxy selezionato)
-            return await self._proxy_stream(request, stream_url, stream_headers, bypass_warp=bypass_warp, forced_proxy=selected_proxy)
+            proxy_response = await self._proxy_stream(request, stream_url, stream_headers, bypass_warp=bypass_warp, forced_proxy=selected_proxy)
+
+            # ✅ FIX: Se l'upstream restituisce un errore e abbiamo un estrattore, 
+            # il token in cache potrebbe essere scaduto. Forza un refresh!
+            if isinstance(proxy_response, web.Response) and proxy_response.status in [403, 404, 500, 502, 503, 504]:
+                if extractor and not force_refresh:
+                    logger.warning(f"🔄 Upstream returned {proxy_response.status}. Forcing extractor refresh for {target_url[:80]}...")
+                    
+                    result = await extractor.extract(
+                        target_url,
+                        force_refresh=True,
+                        request_headers=combined_headers,
+                        bypass_warp=bypass_warp,
+                        proxy=request.query.get("proxy")
+                    )
+                    bypass_warp = result.get("bypass_warp", bypass_warp)
+                    stream_url = result["destination_url"]
+                    stream_headers = result.get("request_headers", {})
+                    
+                    # Riprova proxy_stream con i nuovi dati
+                    proxy_response = await self._proxy_stream(request, stream_url, stream_headers, bypass_warp=bypass_warp, forced_proxy=selected_proxy)
+
+            return proxy_response
 
         except Exception as e:
             # ✅ MIGLIORATO: Distingui tra errori temporanei (sito offline) ed errori critici

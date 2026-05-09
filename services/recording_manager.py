@@ -165,6 +165,15 @@ class RecordingManager:
 
     def _build_proxy_params(self, url: str) -> Dict[str, str]:
         """Build common proxy parameters."""
+        import urllib.parse
+        # Prevent double proxying if user pastes an EasyProxy URL
+        if "/proxy/hls/manifest.m3u8" in url or "/proxy/mpd/manifest.m3u8" in url:
+            parsed = urllib.parse.urlparse(url)
+            qs = urllib.parse.parse_qs(parsed.query)
+            if 'd' in qs:
+                url = qs['d'][0]
+                logger.info(f"Unwrapped proxy URL to original source: {url[:80]}...")
+
         params = {'d': url, 'no_bypass': '1'}
         if API_PASSWORD:
             params['api_password'] = API_PASSWORD
