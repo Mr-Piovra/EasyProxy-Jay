@@ -409,6 +409,162 @@ class HLSProxy:
         self.dash_sessions = {}
         self.dash_session_ttl = 21600  # 6 hours
 
+        # ✅ OPT: Segment prefetch cache — scarica N+1 in background mentre serviamo N.
+        # Struttura: url_key -> (body_bytes, upstream_headers, expires_at)
+        # TTL = durata segmento HLS tipica + margine (max 60s per evitare stale su zapping)
+        self.segment_prefetch_cache: dict = {}
+        self.segment_prefetch_ttl: int = 60   # secondi
+        # Set degli URL attualmente in prefetch (evita doppi download paralleli)
+        self.segment_prefetch_in_flight: set = set()
+        # Ultimo manifest raw visto per ciascun base-URL CDN (per estrarre next segment)
+        # Struttura: cdn_base -> (manifest_text, fetch_time)
+        self.last_manifest_by_cdn: dict = {}
+
+    # ---------------------------------------------------------------------------
+    # Segment Prefetch
+    # ---------------------------------------------------------------------------
+
+    def _prefetch_cache_key(self, url: str) -> str:
+        """Chiave deterministica (MD5 12-char) per la prefetch cache."""
+        import hashlib as _hl
+        return _hl.md5(url.encode()).hexdigest()[:16]
+
+    def _get_next_segment_url(self, manifest_text: str, current_url: str) -> str | None:
+        """
+        Dato il testo del manifest HLS e l'URL del segmento appena servito,
+        ritorna l'URL assoluto del segmento successivo, o None se non trovabile.
+        Parsing minimal: legge solo le righe non-comment per evitare import extra.
+        """
+        try:
+            # Estrai base URL del manifest (directory del manifest)
+            import urllib.parse as _up
+            # current_url è il segmento corrente, la base è la sua directory
+            parsed_current = _up.urlparse(current_url)
+            current_path = parsed_current.path  # es. /hls/6a007e87_97.ts
+
+            # Raccoglie tutte le righe che sembrano URL di segmento (non direttive #)
+            segment_lines = [
+                line.strip()
+                for line in manifest_text.splitlines()
+                if line.strip() and not line.strip().startswith('#')
+            ]
+            if not segment_lines:
+                return None
+
+            # Risolvi gli URL relativi in assoluti usando il manifest_url del cdn
+            # Usiamo current_url come base: ha stesso schema+host del CDN
+            cdn_base = f"{parsed_current.scheme}://{parsed_current.netloc}"
+            manifest_dir = cdn_base + current_path.rsplit('/', 1)[0] + '/'
+
+            absolute_segments = []
+            for seg in segment_lines:
+                if seg.startswith('http://') or seg.startswith('https://'):
+                    absolute_segments.append(seg)
+                elif seg.startswith('/'):
+                    absolute_segments.append(cdn_base + seg)
+                else:
+                    absolute_segments.append(manifest_dir + seg)
+
+            # Trova l'indice del segmento corrente (confronto path)
+            for i, abs_seg in enumerate(absolute_segments):
+                parsed_abs = _up.urlparse(abs_seg)
+                if parsed_abs.path == current_path:
+                    if i + 1 < len(absolute_segments):
+                        return absolute_segments[i + 1]
+                    return None  # Siamo all'ultimo segmento del manifest
+
+            # Fallback: se il segmento corrente non si trova nel manifest
+            # (es. manifest aggiornato), ritorna il PRIMO segmento della lista
+            # come best-effort (il player lo chiederà presto)
+            logger.debug(
+                f"[Prefetch] Segmento corrente non trovato nel manifest, "
+                f"prefetch del primo segmento disponibile"
+            )
+            return absolute_segments[0] if absolute_segments else None
+
+        except Exception as e:
+            logger.debug(f"[Prefetch] Errore parsing manifest per next-segment: {e}")
+            return None
+
+    async def _prefetch_next_segment(
+        self,
+        next_url: str,
+        stream_headers: dict,
+        session,
+        disable_ssl: bool,
+        bypass_warp: bool,
+    ) -> None:
+        """
+        Scarica il segmento 'next_url' in background e lo salva in segment_prefetch_cache.
+        Completamente fire-and-forget: qualsiasi errore viene loggato ma non propaga.
+        Evita download duplicati tramite segment_prefetch_in_flight.
+        """
+        cache_key = self._prefetch_cache_key(next_url)
+
+        # Evita doppio prefetch dello stesso segmento
+        if cache_key in self.segment_prefetch_in_flight:
+            logger.debug(f"[Prefetch] Già in corso per {next_url[-60:]}")
+            return
+        # Evita di ri-prefetchare qualcosa già in cache
+        if cache_key in self.segment_prefetch_cache:
+            logger.debug(f"[Prefetch] Già in cache per {next_url[-60:]}")
+            return
+
+        self.segment_prefetch_in_flight.add(cache_key)
+        t_start = time.monotonic()
+        logger.info(f"🔄 [Prefetch] Avvio download anticipato: ...{next_url[-80:]}")
+
+        try:
+            import yarl as _yarl
+            request_target = _yarl.URL(next_url, encoded=True)
+            headers = dict(stream_headers)
+
+            async with session.get(
+                request_target,
+                headers=headers,
+                ssl=not disable_ssl,
+            ) as resp:
+                if resp.status not in (200, 206):
+                    logger.warning(
+                        f"⚠️ [Prefetch] Upstream {resp.status} per {next_url[-60:]} — cache saltata"
+                    )
+                    return
+
+                body = await resp.read()
+                # Strip fake PNG header se necessario
+                if next_url.endswith('.ts'):
+                    body = self._strip_fake_png_header_from_ts(body)
+
+                upstream_headers = dict(resp.headers)
+                expires_at = time.time() + self.segment_prefetch_ttl
+                self.segment_prefetch_cache[cache_key] = (body, upstream_headers, expires_at)
+
+                elapsed = time.monotonic() - t_start
+                logger.info(
+                    f"✅ [Prefetch] Segmento pronto in {elapsed:.2f}s "
+                    f"({len(body) // 1024}KB): ...{next_url[-60:]}"
+                )
+
+        except asyncio.CancelledError:
+            logger.debug(f"[Prefetch] Task cancellato per {next_url[-60:]}")
+        except Exception as e:
+            elapsed = time.monotonic() - t_start
+            logger.warning(
+                f"⚠️ [Prefetch] Errore dopo {elapsed:.2f}s per {next_url[-60:]}: "
+                f"{type(e).__name__}: {e}"
+            )
+        finally:
+            self.segment_prefetch_in_flight.discard(cache_key)
+
+    def _cleanup_prefetch_cache(self) -> None:
+        """Rimuove entry scadute dalla prefetch cache (chiamata lazy)."""
+        now = time.time()
+        stale = [k for k, (_, _, exp) in list(self.segment_prefetch_cache.items()) if now > exp]
+        for k in stale:
+            self.segment_prefetch_cache.pop(k, None)
+        if stale:
+            logger.debug(f"[Prefetch] Cache cleanup: rimossi {len(stale)} segmenti scaduti")
+
     async def shorten_hls_url(self, url: str) -> str:
         """Crea un ID breve per un URL e lo memorizza nella mappa."""
         if not url:
@@ -3490,7 +3646,32 @@ class HLSProxy:
                             )
                         return response
 
-                content_bytes = await resp.read()
+                # ✅ OPT: Controlla se il segmento è già in cache prefetch
+                _is_ts_segment = (
+                    request.path.endswith(".ts") or stream_url.endswith(".ts")
+                    or request.path.endswith(".m4s") or stream_url.endswith(".m4s")
+                )
+                _prefetch_hit = False
+                if _is_ts_segment:
+                    _pk = self._prefetch_cache_key(stream_url)
+                    _cached_seg = self.segment_prefetch_cache.get(_pk)
+                    if _cached_seg:
+                        _body_cached, _hdrs_cached, _exp_cached = _cached_seg
+                        if time.time() < _exp_cached:
+                            content_bytes = _body_cached
+                            _prefetch_hit = True
+                            self.segment_prefetch_cache.pop(_pk, None)
+                            logger.info(
+                                f"⚡ [Prefetch HIT] Segmento servito da cache ({len(content_bytes) // 1024}KB): "
+                                f"...{stream_url[-60:]}"
+                            )
+                        else:
+                            # Entry scaduta
+                            self.segment_prefetch_cache.pop(_pk, None)
+                            logger.debug(f"[Prefetch] Cache scaduta per {stream_url[-60:]}")
+
+                if not _prefetch_hit:
+                    content_bytes = await resp.read()
                 manifest_content = None
                 try:
                     decoded_text = content_bytes.decode("utf-8", errors='replace')
@@ -3522,6 +3703,23 @@ class HLSProxy:
 
                 if manifest_content:
                     logger.info(f"📄 HLS manifest detected: {stream_url}")
+                    # ✅ OPT: Salva il manifest raw nella mappa CDN per il prefetch.
+                    # Solo media playlist (contengono righe .ts/.m4s), non master playlist.
+                    try:
+                        import urllib.parse as _up_mf
+                        _mf_is_media = any(
+                            line.strip().endswith('.ts') or line.strip().endswith('.m4s')
+                            for line in manifest_content.splitlines()
+                            if line.strip() and not line.strip().startswith('#')
+                        )
+                        if _mf_is_media:
+                            _mf_cdn_host = _up_mf.urlparse(stream_url).netloc
+                            self.last_manifest_by_cdn[_mf_cdn_host] = (manifest_content, time.time())
+                            logger.debug(
+                                f"[Prefetch] Media manifest salvato per CDN: {_mf_cdn_host}"
+                            )
+                    except Exception as _mf_ex:
+                        logger.debug(f"[Prefetch] Errore salvataggio manifest CDN: {_mf_ex}")
                     scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
                     host = request.headers.get("X-Forwarded-Host", request.host)
                     proxy_base = f"{scheme}://{host}"
@@ -3721,10 +3919,13 @@ class HLSProxy:
                 # Streaming normale per altri tipi di contenuto (segmenti binari)
                 # Il body è già stato letto in content_bytes, usiamo quello.
                 segment_was_stripped = False
-                if request.path.endswith(".ts") or stream_url.endswith(".ts"):
-                    original_len = len(content_bytes)
-                    content_bytes = self._strip_fake_png_header_from_ts(content_bytes)
-                    segment_was_stripped = len(content_bytes) != original_len
+                _is_ts_seg = request.path.endswith(".ts") or stream_url.endswith(".ts")
+                if _is_ts_seg:
+                    if not _prefetch_hit:
+                        # Stripping solo se non servito da prefetch cache (già strippato al momento del prefetch)
+                        original_len = len(content_bytes)
+                        content_bytes = self._strip_fake_png_header_from_ts(content_bytes)
+                        segment_was_stripped = len(content_bytes) != original_len
 
                 response_headers = {}
 
@@ -3782,11 +3983,66 @@ class HLSProxy:
                     response_headers, "Content-Length", str(len(content_bytes))
                 )
                 
-                return web.Response(
+                final_response = web.Response(
                     body=content_bytes,
-                    status=resp.status,
+                    status=resp.status if not _prefetch_hit else 200,
                     headers=response_headers,
                 )
+
+                # ✅ OPT: Lancia prefetch del prossimo segmento in background.
+                # Lo facciamo DOPO aver costruito la risposta (non await) per non
+                # aggiungere latenza al client. Opera solo su segmenti .ts o .m4s.
+                if _is_ts_seg:
+                    try:
+                        # Recupera il manifest più recente visto per questo CDN
+                        import urllib.parse as _up_pf
+                        _cdn_host = _up_pf.urlparse(stream_url).netloc
+                        _manifest_entry = self.last_manifest_by_cdn.get(_cdn_host)
+                        if _manifest_entry:
+                            _manifest_text, _mf_time = _manifest_entry
+                            # Usa solo se il manifest è fresco (< 30s)
+                            if time.time() - _mf_time < 30:
+                                _next_url = self._get_next_segment_url(_manifest_text, stream_url)
+                                if _next_url and _next_url != stream_url:
+                                    _nk = self._prefetch_cache_key(_next_url)
+                                    if (
+                                        _nk not in self.segment_prefetch_cache
+                                        and _nk not in self.segment_prefetch_in_flight
+                                    ):
+                                        asyncio.create_task(
+                                            self._prefetch_next_segment(
+                                                next_url=_next_url,
+                                                stream_headers=headers,
+                                                session=session,
+                                                disable_ssl=disable_ssl,
+                                                bypass_warp=bypass_warp,
+                                            )
+                                        )
+                                    else:
+                                        logger.debug(
+                                            f"[Prefetch] Segmento già in cache/in-flight, skip: "
+                                            f"...{_next_url[-60:]}"
+                                        )
+                                else:
+                                    logger.debug(
+                                        "[Prefetch] Nessun segmento successivo identificato nel manifest"
+                                    )
+                            else:
+                                logger.debug(
+                                    f"[Prefetch] Manifest per {_cdn_host} troppo vecchio "
+                                    f"({int(time.time() - _mf_time)}s), skip prefetch"
+                                )
+                        else:
+                            logger.debug(
+                                f"[Prefetch] Nessun manifest in memoria per {_cdn_host}, "
+                                "skip prefetch (primo segmento della sessione)"
+                            )
+                        # Pulizia lazy della cache prefetch
+                        self._cleanup_prefetch_cache()
+                    except Exception as _pf_ex:
+                        logger.debug(f"[Prefetch] Errore nella pianificazione: {_pf_ex}")
+
+                return final_response
 
 
         except (ClientPayloadError, ConnectionResetError, OSError) as e:

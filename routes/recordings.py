@@ -265,24 +265,23 @@ def setup_recording_routes(app, recording_manager, tvvoo_manager=None):
         import re
         range_header = request.headers.get('Range')
         start_byte = 0
-        
+
         if range_header:
             match = re.search(r'bytes=(\d+)-', range_header)
             if match:
                 start_byte = int(match.group(1))
 
         file_size = os.path.getsize(file_path)
-        
+
         headers = {
             "Content-Type": content_type,
             "Access-Control-Allow-Origin": "*",
             "Cache-Control": "no-cache",
             "Accept-Ranges": "bytes"
         }
-        
+
         if start_byte > 0:
             status = 206
-            # Use * for unknown total size to allow open-ended streaming
             headers["Content-Range"] = f"bytes {start_byte}-{max(start_byte, file_size-1)}/*"
             headers["Transfer-Encoding"] = "chunked"
         else:
@@ -298,7 +297,7 @@ def setup_recording_routes(app, recording_manager, tvvoo_manager=None):
             with open(file_path, 'rb') as f:
                 if start_byte > 0:
                     f.seek(start_byte)
-                    
+
                 while True:
                     chunk = f.read(65536)  # 64KB chunks
                     if chunk:
@@ -309,16 +308,33 @@ def setup_recording_routes(app, recording_manager, tvvoo_manager=None):
                         if not rec or not rec.get('is_active'):
                             logger.debug(f"Recording {recording_id} finished, ending stream")
                             break
+
+                        # ✅ FIX: Check if the .ts file was replaced by .mp4 during remuxing
+                        if not os.path.exists(file_path):
+                            mp4_path = file_path.replace('.ts', '.mp4')
+                            if os.path.exists(mp4_path):
+                                logger.info(f"Recording {recording_id}: .ts replaced by .mp4, switching file")
+                            break
+
                         # Wait for more data from FFmpeg
                         await asyncio.sleep(0.5)
+        except FileNotFoundError:
+            # .ts was deleted by the remuxer mid-stream — this is expected, not an error
+            logger.debug(f"Recording {recording_id}: source file removed (likely remuxed to .mp4)")
         except ConnectionResetError:
             logger.debug(f"Client disconnected from recording {recording_id} stream")
         except Exception as e:
-            if "Connection lost" not in str(e):
+            err = str(e)
+            if "Connection lost" not in err and "closing transport" not in err:
                 logger.warning(f"Error streaming recording {recording_id}: {e}")
 
-        await response.write_eof()
+        # ✅ FIX: protect write_eof from ClientConnectionResetError on closed transports
+        try:
+            await response.write_eof()
+        except Exception:
+            pass
         return response
+
 
     async def handle_active_recordings(request):
         """GET /api/recordings/active - Get only active recordings."""
