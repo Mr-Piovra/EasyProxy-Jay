@@ -3703,23 +3703,104 @@ class HLSProxy:
 
                 if manifest_content:
                     logger.info(f"📄 HLS manifest detected: {stream_url}")
-                    # ✅ OPT: Salva il manifest raw nella mappa CDN per il prefetch.
-                    # Solo media playlist (contengono righe .ts/.m4s), non master playlist.
+                    # ✅ OPT: Salva il manifest raw nella mappa CDN e avvia prefetch anticipato.
+                    # Opera solo su media playlist (contengono righe .ts/.m4s).
+                    # STRATEGIA: partire dal manifest (non dal segmento) garantisce 9-10s di vantaggio
+                    # rispetto all'arrivo della richiesta del player → cache HIT garantita.
                     try:
                         import urllib.parse as _up_mf
-                        _mf_is_media = any(
-                            line.strip().endswith('.ts') or line.strip().endswith('.m4s')
+                        _mf_seg_lines = [
+                            line.strip()
                             for line in manifest_content.splitlines()
-                            if line.strip() and not line.strip().startswith('#')
-                        )
-                        if _mf_is_media:
+                            if line.strip()
+                            and not line.strip().startswith('#')
+                            and (line.strip().endswith('.ts') or line.strip().endswith('.m4s'))
+                        ]
+                        if _mf_seg_lines:
                             _mf_cdn_host = _up_mf.urlparse(stream_url).netloc
+                            _mf_cdn_base = f"{_up_mf.urlparse(stream_url).scheme}://{_mf_cdn_host}"
+                            _mf_dir = _mf_cdn_base + _up_mf.urlparse(stream_url).path.rsplit('/', 1)[0] + '/'
                             self.last_manifest_by_cdn[_mf_cdn_host] = (manifest_content, time.time())
                             logger.debug(
-                                f"[Prefetch] Media manifest salvato per CDN: {_mf_cdn_host}"
+                                f"[Prefetch] Media manifest salvato per CDN: {_mf_cdn_host} "
+                                f"({len(_mf_seg_lines)} segmenti)"
                             )
+
+                            # Prefetch anticipato: scarica gli ultimi 2 segmenti del manifest
+                            # (live edge). Il player li chiederà entro i prossimi 9-18s.
+                            # Limit a 2 per non saturare la banda del telefono.
+                            _segs_to_prefetch = _mf_seg_lines[-2:]
+                            for _seg_rel in _segs_to_prefetch:
+                                if _seg_rel.startswith('http://') or _seg_rel.startswith('https://'):
+                                    _seg_abs = _seg_rel
+                                elif _seg_rel.startswith('/'):
+                                    _seg_abs = _mf_cdn_base + _seg_rel
+                                else:
+                                    _seg_abs = _mf_dir + _seg_rel
+                                # Normalizza disable_ssl nell'URL se necessario
+                                if disable_ssl and 'disable_ssl' not in _seg_abs:
+                                    _seg_abs += ('&' if '?' in _seg_abs else '?') + 'disable_ssl=1'
+                                _spk = self._prefetch_cache_key(_seg_abs)
+                                if (
+                                    _spk not in self.segment_prefetch_cache
+                                    and _spk not in self.segment_prefetch_in_flight
+                                ):
+                                    asyncio.create_task(
+                                        self._prefetch_next_segment(
+                                            next_url=_seg_abs,
+                                            stream_headers=headers,
+                                            session=session,
+                                            disable_ssl=disable_ssl,
+                                            bypass_warp=bypass_warp,
+                                        )
+                                    )
+                                    logger.debug(
+                                        f"[Prefetch] Prefetch anticipato da manifest: ...{_seg_abs[-60:]}"
+                                    )
+                                else:
+                                    logger.debug(
+                                        f"[Prefetch] Già in cache/in-flight (manifest): ...{_seg_abs[-60:]}"
+                                    )
                     except Exception as _mf_ex:
-                        logger.debug(f"[Prefetch] Errore salvataggio manifest CDN: {_mf_ex}")
+                        logger.debug(f"[Prefetch] Errore prefetch da manifest: {_mf_ex}")
+
+                    # ✅ OPT: Connection pre-warm — elimina il TCP slow start al cold start HLS.
+                    # Quando serviamo il manifest sappiamo già il dominio CDN dei segmenti (è lo
+                    # stesso dell'URL upstream). Apriamo in background una connessione HEAD verso
+                    # di esso: quando il player richiederà i segmenti pochi ms dopo, aiohttp
+                    # troverà la connessione già calda nel pool e salterà handshake + slow start.
+                    # Fire-and-forget: qualsiasi errore è silenzioso e non impatta il flusso.
+                    try:
+                        _cdn_parsed = urlparse(stream_url)
+                        _cdn_netloc = _cdn_parsed.netloc
+                        _cdn_base = f"{_cdn_parsed.scheme}://{_cdn_netloc}/"
+                        _prewarm_key = f"prewarm:{_cdn_netloc}:{session_proxy or 'direct'}"
+                        if _cdn_netloc and _prewarm_key not in self.prefetch_tasks:
+                            self.prefetch_tasks.add(_prewarm_key)
+                            async def _prewarm_connection(
+                                _base=_cdn_base,
+                                _sess=session,
+                                _ssl=disable_ssl,
+                                _hdrs={"User-Agent": headers.get("User-Agent", "Mozilla/5.0")},
+                                _key=_prewarm_key,
+                            ):
+                                try:
+                                    async with _sess.head(
+                                        _base,
+                                        headers=_hdrs,
+                                        ssl=not _ssl,
+                                        timeout=aiohttp.ClientTimeout(total=5, connect=3),
+                                        allow_redirects=False,
+                                    ):
+                                        pass
+                                    logger.debug(f"🔥 Pre-warmed TCP connection to {_base}")
+                                except Exception:
+                                    pass  # silenzioso: il pre-warm è best-effort
+                                finally:
+                                    self.prefetch_tasks.discard(_key)
+                            asyncio.create_task(_prewarm_connection())
+                    except Exception:
+                        pass  # il pre-warm non deve mai influenzare il flusso principale
                     scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
                     host = request.headers.get("X-Forwarded-Host", request.host)
                     proxy_base = f"{scheme}://{host}"
