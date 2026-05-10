@@ -56,6 +56,8 @@ class RecordingManager:
         self.db = RecordingDB(recordings_dir)
         self.processes: Dict[str, asyncio.subprocess.Process] = {}
         self.start_times: Dict[str, float] = {}
+        # Track IDs that were manually stopped by the user (no auto-restart)
+        self._manually_stopped: set = set()
 
     # =========================================================================
     # Stream Type Detection
@@ -431,6 +433,8 @@ class RecordingManager:
             finally:
                 self.processes.pop(recording_id, None)
                 self.start_times.pop(recording_id, None)
+                # Mark as manually stopped to suppress auto-restart
+                self._manually_stopped.add(recording_id)
         else:
             # Process in different worker - use PID from database
             pid = recording.get('pid')
@@ -492,8 +496,21 @@ class RecordingManager:
                 asyncio.create_task(self._remux_recording(recording_id))
             else:
                 error_msg = stderr_text[:500] if stderr_text else "Unknown error"
-                logger.error(f"Recording {recording_id} failed with code {process.returncode}: {error_msg}")
-                self.db.update_recording_status(recording_id, 'failed', error_msg)
+                was_manually_stopped = recording_id in self._manually_stopped
+
+                if was_manually_stopped:
+                    logger.info(f"Recording {recording_id} stopped by user (code {process.returncode}).")
+                    self.db.update_recording_status(recording_id, 'stopped')
+                else:
+                    logger.error(f"Recording {recording_id} crashed (code {process.returncode}): {error_msg}")
+                    self.db.update_recording_status(recording_id, 'failed', error_msg)
+
+                    # ✅ AUTO-RESTART: riavvia la registrazione sullo stesso URL dopo 5s
+                    original = self.db.get_recording(recording_id)
+                    if original and original.get('url'):
+                        asyncio.create_task(
+                            self._auto_restart_recording(recording_id, original)
+                        )
 
             recording = self.db.get_recording(recording_id)
             if recording and recording.get('file_path'):
@@ -513,12 +530,47 @@ class RecordingManager:
         finally:
             self.processes.pop(recording_id, None)
             self.start_times.pop(recording_id, None)
+            self._manually_stopped.discard(recording_id)
+
+    async def _auto_restart_recording(self, failed_id: str, original: Dict[str, Any]):
+        """Automatically restart a failed recording after a short delay.
+
+        Called only when FFmpeg crashes unexpectedly (not on manual stop).
+        Calculates how much time is left from the original scheduled duration
+        and starts a new recording for the remaining time.
+        """
+        url = original.get('url', '')
+        name = original.get('name', '')
+        clearkey = original.get('clearkey')
+
+        # Calculate remaining duration
+        original_duration = original.get('duration_seconds') or self.max_duration
+        elapsed = self._calculate_elapsed(original.get('started_at', ''))
+        remaining = max(60, original_duration - elapsed)  # at least 60s
+
+        logger.warning(
+            f"🔄 Auto-restarting crashed recording '{name}' in 5s "
+            f"(elapsed={elapsed}s, remaining={remaining}s, url={url[:60]}...)"
+        )
+        await asyncio.sleep(5)
+
+        new_rec = await self.start_recording(
+            url=url,
+            name=name,
+            duration=remaining,
+            clearkey=clearkey
+        )
+        if new_rec:
+            logger.info(f"✅ Auto-restart successful: new recording ID {new_rec['id']}")
+        else:
+            logger.error(f"❌ Auto-restart failed for '{name}' — stream may be unavailable")
 
     async def _remux_recording(self, recording_id: str):
         """Offline background remuxing da .ts a .mp4 per ottenere una timeline funzionante (VLC/browser)."""
         recording = self.db.get_recording(recording_id)
         if not recording or not recording.get('file_path'):
             return
+
             
         input_path = recording['file_path']
         if not os.path.exists(input_path):
