@@ -141,14 +141,14 @@ fi
 # ─── Build ────────────────────────────────────────────────
 step "Phase 4/6: Build TypeScript → JavaScript"
 
-log "npm install + npm run build (può richiedere 1-2 minuti)..."
+log "npm install --include=dev + npm run build (può richiedere 1-2 minuti)..."
 BUILD_OUT=$(su -c "chroot '$ROOTFS' /bin/bash -c '
     export HOME=/root
     export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     export TMPDIR=/tmp
-    export NODE_ENV=production
+    # NON impostare NODE_ENV=production: typescript è in devDependencies
     cd $TVVOO_DIR
-    npm install --quiet 2>&1
+    npm install --include=dev --quiet 2>&1
     npm run build 2>&1
     echo BUILD_DONE
 '" 2>/dev/null)
