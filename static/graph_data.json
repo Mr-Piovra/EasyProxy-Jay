@@ -1,0 +1,1675 @@
+{
+  "nodes": [
+    {
+      "id": "config.py",
+      "name": "config.py",
+      "group": 2,
+      "type": "file",
+      "size": 10733,
+      "is_proot": false
+    },
+    {
+      "id": "LICENSE",
+      "name": "LICENSE",
+      "group": 11,
+      "type": "file",
+      "size": 1062,
+      "is_proot": false
+    },
+    {
+      "id": "requirements.txt",
+      "name": "requirements.txt",
+      "group": 8,
+      "type": "file",
+      "size": 188,
+      "is_proot": false
+    },
+    {
+      "id": "ANDROID.md",
+      "name": "ANDROID.md",
+      "group": 6,
+      "type": "file",
+      "size": 14704,
+      "is_proot": false
+    },
+    {
+      "id": "Dockerfile",
+      "name": "Dockerfile",
+      "group": 11,
+      "type": "file",
+      "size": 3619,
+      "is_proot": false
+    },
+    {
+      "id": "Dockerfile-hf",
+      "name": "Dockerfile-hf",
+      "group": 11,
+      "type": "file",
+      "size": 155,
+      "is_proot": false
+    },
+    {
+      "id": "termux_transcode.sh",
+      "name": "termux_transcode.sh",
+      "group": 7,
+      "type": "file",
+      "size": 2905,
+      "is_proot": true
+    },
+    {
+      "id": "__init__.py",
+      "name": "__init__.py",
+      "group": 2,
+      "type": "file",
+      "size": 32,
+      "is_proot": false
+    },
+    {
+      "id": "README.md",
+      "name": "README.md",
+      "group": 6,
+      "type": "file",
+      "size": 7353,
+      "is_proot": false
+    },
+    {
+      "id": "start_full.bat",
+      "name": "start_full.bat",
+      "group": 7,
+      "type": "file",
+      "size": 2390,
+      "is_proot": false
+    },
+    {
+      "id": "app.py",
+      "name": "app.py",
+      "group": 2,
+      "type": "file",
+      "size": 10753,
+      "is_proot": false
+    },
+    {
+      "id": "docker-compose.yml",
+      "name": "docker-compose.yml",
+      "group": 10,
+      "type": "file",
+      "size": 512,
+      "is_proot": false
+    },
+    {
+      "id": "AGENTS.md",
+      "name": "AGENTS.md",
+      "group": 6,
+      "type": "file",
+      "size": 2631,
+      "is_proot": false
+    },
+    {
+      "id": "entrypoint.sh",
+      "name": "entrypoint.sh",
+      "group": 7,
+      "type": "file",
+      "size": 5414,
+      "is_proot": false
+    },
+    {
+      "id": "termux_setup.sh",
+      "name": "termux_setup.sh",
+      "group": 7,
+      "type": "file",
+      "size": 12804,
+      "is_proot": true
+    },
+    {
+      "id": "utils",
+      "name": "utils",
+      "group": 1,
+      "type": "directory",
+      "is_proot": false
+    },
+    {
+      "id": "utils/cookie_cache.py",
+      "name": "cookie_cache.py",
+      "group": 2,
+      "type": "file",
+      "size": 1816,
+      "is_proot": false
+    },
+    {
+      "id": "utils/scanner.py",
+      "name": "scanner.py",
+      "group": 2,
+      "type": "file",
+      "size": 6213,
+      "is_proot": false
+    },
+    {
+      "id": "utils/packed.py",
+      "name": "packed.py",
+      "group": 2,
+      "type": "file",
+      "size": 7473,
+      "is_proot": false
+    },
+    {
+      "id": "utils/smart_request.py",
+      "name": "smart_request.py",
+      "group": 2,
+      "type": "file",
+      "size": 7734,
+      "is_proot": false
+    },
+    {
+      "id": "utils/proxy_manager.py",
+      "name": "proxy_manager.py",
+      "group": 2,
+      "type": "file",
+      "size": 10557,
+      "is_proot": false
+    },
+    {
+      "id": "utils/solver_manager.py",
+      "name": "solver_manager.py",
+      "group": 2,
+      "type": "file",
+      "size": 5068,
+      "is_proot": false
+    },
+    {
+      "id": "utils/__init__.py",
+      "name": "__init__.py",
+      "group": 2,
+      "type": "file",
+      "size": 26,
+      "is_proot": false
+    },
+    {
+      "id": "utils/mpd_converter.py",
+      "name": "mpd_converter.py",
+      "group": 2,
+      "type": "file",
+      "size": 22702,
+      "is_proot": false
+    },
+    {
+      "id": "utils/logger.py",
+      "name": "logger.py",
+      "group": 2,
+      "type": "file",
+      "size": 2292,
+      "is_proot": false
+    },
+    {
+      "id": "utils/python_aesgcm.py",
+      "name": "python_aesgcm.py",
+      "group": 2,
+      "type": "file",
+      "size": 3914,
+      "is_proot": false
+    },
+    {
+      "id": "utils/drm_decrypter.py",
+      "name": "drm_decrypter.py",
+      "group": 2,
+      "type": "file",
+      "size": 31884,
+      "is_proot": false
+    },
+    {
+      "id": "static",
+      "name": "static",
+      "group": 1,
+      "type": "directory",
+      "is_proot": false
+    },
+    {
+      "id": "static/favicon.ico",
+      "name": "favicon.ico",
+      "group": 11,
+      "type": "file",
+      "size": 15406,
+      "is_proot": false
+    },
+    {
+      "id": "static/graph_data.json",
+      "name": "graph_data.json",
+      "group": 9,
+      "type": "file",
+      "size": 35333,
+      "is_proot": false
+    },
+    {
+      "id": "static/graphify.html",
+      "name": "graphify.html",
+      "group": 3,
+      "type": "file",
+      "size": 17771,
+      "is_proot": false
+    },
+    {
+      "id": "templates",
+      "name": "templates",
+      "group": 1,
+      "type": "directory",
+      "is_proot": false
+    },
+    {
+      "id": "templates/url_generator.html",
+      "name": "url_generator.html",
+      "group": 3,
+      "type": "file",
+      "size": 27974,
+      "is_proot": false
+    },
+    {
+      "id": "templates/index.html",
+      "name": "index.html",
+      "group": 3,
+      "type": "file",
+      "size": 18465,
+      "is_proot": false
+    },
+    {
+      "id": "templates/builder.html",
+      "name": "builder.html",
+      "group": 3,
+      "type": "file",
+      "size": 34376,
+      "is_proot": false
+    },
+    {
+      "id": "templates/info.html",
+      "name": "info.html",
+      "group": 3,
+      "type": "file",
+      "size": 76619,
+      "is_proot": false
+    },
+    {
+      "id": "templates/recordings.html",
+      "name": "recordings.html",
+      "group": 3,
+      "type": "file",
+      "size": 32628,
+      "is_proot": false
+    },
+    {
+      "id": "templates/redoc.html",
+      "name": "redoc.html",
+      "group": 3,
+      "type": "file",
+      "size": 1637,
+      "is_proot": false
+    },
+    {
+      "id": "templates/docs.html",
+      "name": "docs.html",
+      "group": 3,
+      "type": "file",
+      "size": 907,
+      "is_proot": false
+    },
+    {
+      "id": "extractors",
+      "name": "extractors",
+      "group": 1,
+      "type": "directory",
+      "is_proot": false
+    },
+    {
+      "id": "extractors/sports99.py",
+      "name": "sports99.py",
+      "group": 2,
+      "type": "file",
+      "size": 6772,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/voe.py",
+      "name": "voe.py",
+      "group": 2,
+      "type": "file",
+      "size": 2863,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/filemoon.py",
+      "name": "filemoon.py",
+      "group": 2,
+      "type": "file",
+      "size": 2126,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/livetv.py",
+      "name": "livetv.py",
+      "group": 2,
+      "type": "file",
+      "size": 10648,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/deltabit.py",
+      "name": "deltabit.py",
+      "group": 2,
+      "type": "file",
+      "size": 23596,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/freeshot.py",
+      "name": "freeshot.py",
+      "group": 2,
+      "type": "file",
+      "size": 9155,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/f16px.py",
+      "name": "f16px.py",
+      "group": 2,
+      "type": "file",
+      "size": 7948,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/vixsrc.py",
+      "name": "vixsrc.py",
+      "group": 2,
+      "type": "file",
+      "size": 25161,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/cinemacity.py",
+      "name": "cinemacity.py",
+      "group": 2,
+      "type": "file",
+      "size": 13106,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/streamhg.py",
+      "name": "streamhg.py",
+      "group": 2,
+      "type": "file",
+      "size": 3315,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/dropload.py",
+      "name": "dropload.py",
+      "group": 2,
+      "type": "file",
+      "size": 2442,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/generic.py",
+      "name": "generic.py",
+      "group": 2,
+      "type": "file",
+      "size": 4858,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/fastream.py",
+      "name": "fastream.py",
+      "group": 2,
+      "type": "file",
+      "size": 1429,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/__init__.py",
+      "name": "__init__.py",
+      "group": 2,
+      "type": "file",
+      "size": 0,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/supervideo.py",
+      "name": "supervideo.py",
+      "group": 2,
+      "type": "file",
+      "size": 956,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/streamtape.py",
+      "name": "streamtape.py",
+      "group": 2,
+      "type": "file",
+      "size": 1722,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/maxstream.py",
+      "name": "maxstream.py",
+      "group": 2,
+      "type": "file",
+      "size": 35147,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/dlstreams.py",
+      "name": "dlstreams.py",
+      "group": 2,
+      "type": "file",
+      "size": 39322,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/mixdrop.py",
+      "name": "mixdrop.py",
+      "group": 2,
+      "type": "file",
+      "size": 25402,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/vavoo.py",
+      "name": "vavoo.py",
+      "group": 2,
+      "type": "file",
+      "size": 13469,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/okru.py",
+      "name": "okru.py",
+      "group": 2,
+      "type": "file",
+      "size": 1645,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/turbovidplay.py",
+      "name": "turbovidplay.py",
+      "group": 2,
+      "type": "file",
+      "size": 3177,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/sportsonline.py",
+      "name": "sportsonline.py",
+      "group": 2,
+      "type": "file",
+      "size": 19003,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/filelions.py",
+      "name": "filelions.py",
+      "group": 2,
+      "type": "file",
+      "size": 1237,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/uqload.py",
+      "name": "uqload.py",
+      "group": 2,
+      "type": "file",
+      "size": 4310,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/vidmoly.py",
+      "name": "vidmoly.py",
+      "group": 2,
+      "type": "file",
+      "size": 1853,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/orion.py",
+      "name": "orion.py",
+      "group": 2,
+      "type": "file",
+      "size": 1596,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/vidoza.py",
+      "name": "vidoza.py",
+      "group": 2,
+      "type": "file",
+      "size": 2318,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/doodstream.py",
+      "name": "doodstream.py",
+      "group": 2,
+      "type": "file",
+      "size": 13415,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/lulustream.py",
+      "name": "lulustream.py",
+      "group": 2,
+      "type": "file",
+      "size": 1182,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/streamwish.py",
+      "name": "streamwish.py",
+      "group": 2,
+      "type": "file",
+      "size": 2677,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/base.py",
+      "name": "base.py",
+      "group": 2,
+      "type": "file",
+      "size": 8536,
+      "is_proot": false
+    },
+    {
+      "id": "extractors/embedsports.py",
+      "name": "embedsports.py",
+      "group": 2,
+      "type": "file",
+      "size": 16607,
+      "is_proot": false
+    },
+    {
+      "id": "routes",
+      "name": "routes",
+      "group": 1,
+      "type": "directory",
+      "is_proot": false
+    },
+    {
+      "id": "routes/recordings.py",
+      "name": "recordings.py",
+      "group": 2,
+      "type": "file",
+      "size": 21366,
+      "is_proot": false
+    },
+    {
+      "id": "routes/playlist_builder.py",
+      "name": "playlist_builder.py",
+      "group": 2,
+      "type": "file",
+      "size": 14811,
+      "is_proot": false
+    },
+    {
+      "id": "routes/__init__.py",
+      "name": "__init__.py",
+      "group": 2,
+      "type": "file",
+      "size": 0,
+      "is_proot": false
+    },
+    {
+      "id": "services",
+      "name": "services",
+      "group": 1,
+      "type": "directory",
+      "is_proot": false
+    },
+    {
+      "id": "services/system_monitor.py",
+      "name": "system_monitor.py",
+      "group": 2,
+      "type": "file",
+      "size": 3408,
+      "is_proot": false
+    },
+    {
+      "id": "services/recording_db.py",
+      "name": "recording_db.py",
+      "group": 2,
+      "type": "file",
+      "size": 8301,
+      "is_proot": false
+    },
+    {
+      "id": "services/ffmpeg_manager.py",
+      "name": "ffmpeg_manager.py",
+      "group": 2,
+      "type": "file",
+      "size": 10902,
+      "is_proot": false
+    },
+    {
+      "id": "services/recording_manager.py",
+      "name": "recording_manager.py",
+      "group": 2,
+      "type": "file",
+      "size": 32387,
+      "is_proot": false
+    },
+    {
+      "id": "services/__init__.py",
+      "name": "__init__.py",
+      "group": 2,
+      "type": "file",
+      "size": 29,
+      "is_proot": false
+    },
+    {
+      "id": "services/manifest_rewriter.py",
+      "name": "manifest_rewriter.py",
+      "group": 2,
+      "type": "file",
+      "size": 26644,
+      "is_proot": false
+    },
+    {
+      "id": "services/tvvoo_manager.py",
+      "name": "tvvoo_manager.py",
+      "group": 2,
+      "type": "file",
+      "size": 6352,
+      "is_proot": false
+    },
+    {
+      "id": "services/EasyProxy-Jay.code-workspace",
+      "name": "EasyProxy-Jay.code-workspace",
+      "group": 11,
+      "type": "file",
+      "size": 95,
+      "is_proot": false
+    },
+    {
+      "id": "services/hls_proxy.py",
+      "name": "hls_proxy.py",
+      "group": 2,
+      "type": "file",
+      "size": 248332,
+      "is_proot": false
+    },
+    {
+      "id": "root",
+      "name": "EasyProxy-Jay",
+      "group": 1,
+      "type": "directory"
+    },
+    {
+      "id": "pip:aiohttp",
+      "name": "aiohttp",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:aiohttp-socks",
+      "name": "aiohttp-socks",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:gunicorn",
+      "name": "gunicorn",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:python-dotenv",
+      "name": "python-dotenv",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:zstandard",
+      "name": "zstandard",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:beautifulsoup4",
+      "name": "beautifulsoup4",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:lxml",
+      "name": "lxml",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:python-socks",
+      "name": "python-socks",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:pycryptodome",
+      "name": "pycryptodome",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:pydash2hls",
+      "name": "pydash2hls",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:playwright",
+      "name": "playwright",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:ddddocr",
+      "name": "ddddocr",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:Pillow",
+      "name": "Pillow",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:curl_cffi",
+      "name": "curl_cffi",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:cloudscraper",
+      "name": "cloudscraper",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:brotli",
+      "name": "brotli",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:bottle",
+      "name": "bottle",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    },
+    {
+      "id": "pip:func_timeout",
+      "name": "func_timeout",
+      "group": 8,
+      "type": "external",
+      "size": 0
+    }
+  ],
+  "links": [
+    {
+      "source": "root",
+      "target": "config.py",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "LICENSE",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "requirements.txt",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "ANDROID.md",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "Dockerfile",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "Dockerfile-hf",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "termux_transcode.sh",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "__init__.py",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "README.md",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "start_full.bat",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "app.py",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "docker-compose.yml",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "AGENTS.md",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "entrypoint.sh",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "termux_setup.sh",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "utils",
+      "type": "containment"
+    },
+    {
+      "source": "utils",
+      "target": "utils/cookie_cache.py",
+      "type": "containment"
+    },
+    {
+      "source": "utils",
+      "target": "utils/scanner.py",
+      "type": "containment"
+    },
+    {
+      "source": "utils",
+      "target": "utils/packed.py",
+      "type": "containment"
+    },
+    {
+      "source": "utils",
+      "target": "utils/smart_request.py",
+      "type": "containment"
+    },
+    {
+      "source": "utils",
+      "target": "utils/proxy_manager.py",
+      "type": "containment"
+    },
+    {
+      "source": "utils",
+      "target": "utils/solver_manager.py",
+      "type": "containment"
+    },
+    {
+      "source": "utils",
+      "target": "utils/__init__.py",
+      "type": "containment"
+    },
+    {
+      "source": "utils",
+      "target": "utils/mpd_converter.py",
+      "type": "containment"
+    },
+    {
+      "source": "utils",
+      "target": "utils/logger.py",
+      "type": "containment"
+    },
+    {
+      "source": "utils",
+      "target": "utils/python_aesgcm.py",
+      "type": "containment"
+    },
+    {
+      "source": "utils",
+      "target": "utils/drm_decrypter.py",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "static",
+      "type": "containment"
+    },
+    {
+      "source": "static",
+      "target": "static/favicon.ico",
+      "type": "containment"
+    },
+    {
+      "source": "static",
+      "target": "static/graph_data.json",
+      "type": "containment"
+    },
+    {
+      "source": "static",
+      "target": "static/graphify.html",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "templates",
+      "type": "containment"
+    },
+    {
+      "source": "templates",
+      "target": "templates/url_generator.html",
+      "type": "containment"
+    },
+    {
+      "source": "templates",
+      "target": "templates/index.html",
+      "type": "containment"
+    },
+    {
+      "source": "templates",
+      "target": "templates/builder.html",
+      "type": "containment"
+    },
+    {
+      "source": "templates",
+      "target": "templates/info.html",
+      "type": "containment"
+    },
+    {
+      "source": "templates",
+      "target": "templates/recordings.html",
+      "type": "containment"
+    },
+    {
+      "source": "templates",
+      "target": "templates/redoc.html",
+      "type": "containment"
+    },
+    {
+      "source": "templates",
+      "target": "templates/docs.html",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "extractors",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/sports99.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/voe.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/filemoon.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/livetv.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/deltabit.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/freeshot.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/f16px.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/vixsrc.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/cinemacity.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/streamhg.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/dropload.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/generic.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/fastream.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/__init__.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/supervideo.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/streamtape.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/maxstream.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/dlstreams.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/mixdrop.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/vavoo.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/okru.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/turbovidplay.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/sportsonline.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/filelions.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/uqload.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/vidmoly.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/orion.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/vidoza.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/doodstream.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/lulustream.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/streamwish.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/base.py",
+      "type": "containment"
+    },
+    {
+      "source": "extractors",
+      "target": "extractors/embedsports.py",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "routes",
+      "type": "containment"
+    },
+    {
+      "source": "routes",
+      "target": "routes/recordings.py",
+      "type": "containment"
+    },
+    {
+      "source": "routes",
+      "target": "routes/playlist_builder.py",
+      "type": "containment"
+    },
+    {
+      "source": "routes",
+      "target": "routes/__init__.py",
+      "type": "containment"
+    },
+    {
+      "source": "root",
+      "target": "services",
+      "type": "containment"
+    },
+    {
+      "source": "services",
+      "target": "services/system_monitor.py",
+      "type": "containment"
+    },
+    {
+      "source": "services",
+      "target": "services/recording_db.py",
+      "type": "containment"
+    },
+    {
+      "source": "services",
+      "target": "services/ffmpeg_manager.py",
+      "type": "containment"
+    },
+    {
+      "source": "services",
+      "target": "services/recording_manager.py",
+      "type": "containment"
+    },
+    {
+      "source": "services",
+      "target": "services/__init__.py",
+      "type": "containment"
+    },
+    {
+      "source": "services",
+      "target": "services/manifest_rewriter.py",
+      "type": "containment"
+    },
+    {
+      "source": "services",
+      "target": "services/tvvoo_manager.py",
+      "type": "containment"
+    },
+    {
+      "source": "services",
+      "target": "services/EasyProxy-Jay.code-workspace",
+      "type": "containment"
+    },
+    {
+      "source": "services",
+      "target": "services/hls_proxy.py",
+      "type": "containment"
+    },
+    {
+      "source": "config.py",
+      "target": "utils/logger.py",
+      "type": "import"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:aiohttp",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:aiohttp-socks",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:gunicorn",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:python-dotenv",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:zstandard",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:beautifulsoup4",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:lxml",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:python-socks",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:pycryptodome",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:pydash2hls",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:playwright",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:ddddocr",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:Pillow",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:curl_cffi",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:cloudscraper",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:brotli",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:bottle",
+      "type": "dependency"
+    },
+    {
+      "source": "requirements.txt",
+      "target": "pip:func_timeout",
+      "type": "dependency"
+    },
+    {
+      "source": "start_full.bat",
+      "target": "app.py",
+      "type": "execution",
+      "is_proot": true
+    },
+    {
+      "source": "app.py",
+      "target": "services/hls_proxy.py",
+      "type": "import"
+    },
+    {
+      "source": "app.py",
+      "target": "services/ffmpeg_manager.py",
+      "type": "import"
+    },
+    {
+      "source": "app.py",
+      "target": "config.py",
+      "type": "import"
+    },
+    {
+      "source": "app.py",
+      "target": "services/recording_manager.py",
+      "type": "import"
+    },
+    {
+      "source": "app.py",
+      "target": "services/tvvoo_manager.py",
+      "type": "import"
+    },
+    {
+      "source": "app.py",
+      "target": "routes/recordings.py",
+      "type": "import"
+    },
+    {
+      "source": "termux_setup.sh",
+      "target": "app.py",
+      "type": "execution",
+      "is_proot": true
+    },
+    {
+      "source": "extractors/deltabit.py",
+      "target": "utils/cookie_cache.py",
+      "type": "import"
+    },
+    {
+      "source": "extractors/deltabit.py",
+      "target": "utils/solver_manager.py",
+      "type": "import"
+    },
+    {
+      "source": "extractors/deltabit.py",
+      "target": "utils/proxy_manager.py",
+      "type": "import"
+    },
+    {
+      "source": "extractors/vixsrc.py",
+      "target": "utils/proxy_manager.py",
+      "type": "import"
+    },
+    {
+      "source": "extractors/fastream.py",
+      "target": "utils/packed.py",
+      "type": "import"
+    },
+    {
+      "source": "extractors/fastream.py",
+      "target": "extractors/base.py",
+      "type": "import"
+    },
+    {
+      "source": "extractors/supervideo.py",
+      "target": "utils/packed.py",
+      "type": "import"
+    },
+    {
+      "source": "extractors/supervideo.py",
+      "target": "extractors/base.py",
+      "type": "import"
+    },
+    {
+      "source": "extractors/mixdrop.py",
+      "target": "utils/cookie_cache.py",
+      "type": "import"
+    },
+    {
+      "source": "extractors/mixdrop.py",
+      "target": "utils/solver_manager.py",
+      "type": "import"
+    },
+    {
+      "source": "extractors/mixdrop.py",
+      "target": "utils/proxy_manager.py",
+      "type": "import"
+    },
+    {
+      "source": "extractors/sportsonline.py",
+      "target": "config.py",
+      "type": "import"
+    },
+    {
+      "source": "extractors/sportsonline.py",
+      "target": "utils/smart_request.py",
+      "type": "import"
+    },
+    {
+      "source": "extractors/filelions.py",
+      "target": "utils/packed.py",
+      "type": "import"
+    },
+    {
+      "source": "extractors/filelions.py",
+      "target": "extractors/base.py",
+      "type": "import"
+    },
+    {
+      "source": "extractors/base.py",
+      "target": "utils/proxy_manager.py",
+      "type": "import"
+    },
+    {
+      "source": "services/tvvoo_manager.py",
+      "target": "extractors/vavoo.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "config.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/generic.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "services/manifest_rewriter.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "utils/drm_decrypter.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "utils/mpd_converter.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/freeshot.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/vavoo.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "routes/playlist_builder.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/vixsrc.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/sportsonline.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/mixdrop.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/voe.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/streamtape.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/orion.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/doodstream.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/fastream.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/filelions.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/filemoon.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/lulustream.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/maxstream.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/okru.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/streamwish.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/streamhg.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/supervideo.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/uqload.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/dropload.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/vidmoly.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/vidoza.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/turbovidplay.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/livetv.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/f16px.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/sports99.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/dlstreams.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/embedsports.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/cinemacity.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "extractors/deltabit.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "config.py",
+      "type": "import"
+    },
+    {
+      "source": "services/hls_proxy.py",
+      "target": "utils/smart_request.py",
+      "type": "import"
+    }
+  ]
+}

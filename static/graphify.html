@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graphify Pro | Project Intelligence</title>
+    <script src="https://unpkg.com/force-graph"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-deep: #050508;
+            --bg-surface: rgba(13, 13, 20, 0.7);
+            --accent-primary: #6366f1;
+            --accent-secondary: #a855f7;
+            --accent-tertiary: #22d3ee;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --border-glow: rgba(99, 102, 241, 0.2);
+            --glass-border: rgba(255, 255, 255, 0.08);
+        }
+
+        * {
+            box-sizing: border-box;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-deep);
+            color: var(--text-primary);
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        #graph-container {
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at 50% 50%, #0f172a 0%, #020617 100%);
+        }
+
+        /* --- Glassmorphism UI --- */
+        .glass-ui {
+            background: var(--bg-surface);
+            backdrop-filter: blur(16px) saturate(180%);
+            -webkit-backdrop-filter: blur(16px) saturate(180%);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+        }
+
+        #header {
+            position: absolute;
+            top: 32px;
+            left: 32px;
+            padding: 20px 32px;
+            z-index: 100;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #header .tag {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--accent-primary);
+            margin-bottom: 4px;
+        }
+
+        #header h1 {
+            margin: 0;
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -1px;
+            background: linear-gradient(135deg, #fff 30%, var(--accent-secondary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 32px;
+            right: 32px;
+            width: 320px;
+            padding: 24px;
+            z-index: 100;
+        }
+
+        .control-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-bottom: 10px;
+            display: block;
+            text-transform: uppercase;
+            font-weight: 700;
+            letter-spacing: 1px;
+        }
+
+        #info-panel {
+            position: absolute;
+            top: 32px;
+            right: 32px;
+            width: 360px;
+            padding: 32px;
+            z-index: 100;
+            display: none;
+            max-height: calc(100vh - 400px);
+            overflow-y: auto;
+        }
+
+        .node-info-title {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            word-break: break-all;
+            color: #fff;
+            line-height: 1.3;
+        }
+
+        .node-info-type {
+            display: inline-flex;
+            align-items: center;
+            padding: 5px 12px;
+            border-radius: 99px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 24px;
+            background: rgba(99, 102, 241, 0.15);
+            color: var(--accent-primary);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+        }
+
+        .node-info-section {
+            margin-bottom: 20px;
+        }
+
+        .node-info-section label {
+            display: block;
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .node-info-value {
+            font-size: 14px;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            word-break: break-all;
+        }
+
+        /* --- Legend --- */
+        #legend {
+            position: absolute;
+            bottom: 32px;
+            left: 32px;
+            padding: 20px;
+            z-index: 100;
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px 20px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 4px;
+            margin-right: 12px;
+            box-shadow: 0 0 10px currentColor;
+        }
+
+        /* --- Search Bar --- */
+        #search-input {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 12px 16px;
+            color: #fff;
+            font-family: inherit;
+            font-size: 14px;
+            outline: none;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        #search-input:focus {
+            border-color: var(--accent-primary);
+            background: rgba(0, 0, 0, 0.6);
+            box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+        }
+
+        /* --- Animations --- */
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(20px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        .animate-slide-in {
+            animation: slideIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
+    </style>
+</head>
+<body>
+    <div id="graph-container"></div>
+
+    <div id="header">
+        <span class="tag">AI Engine</span>
+        <h1>Graphify Pro</h1>
+    </div>
+
+    <div id="legend" class="glass-ui">
+        <div class="legend-item"><div class="legend-color" style="background: #94a3b8; color: rgba(148, 163, 184, 0.4);"></div> Directory</div>
+        <div class="legend-item"><div class="legend-color" style="background: #6366f1; color: rgba(99, 102, 241, 0.4);"></div> Python</div>
+        <div class="legend-item"><div class="legend-color" style="background: #f59e0b; color: rgba(245, 158, 11, 0.4);"></div> HTML</div>
+        <div class="legend-item"><div class="legend-color" style="background: #3b82f6; color: rgba(59, 130, 246, 0.4);"></div> CSS</div>
+        <div class="legend-item"><div class="legend-color" style="background: #10b981; color: rgba(16, 185, 129, 0.4);"></div> JS</div>
+        <div class="legend-item"><div class="legend-color" style="background: #ec4899; color: rgba(236, 72, 153, 0.4);"></div> Markdown</div>
+    </div>
+
+    <div id="info-panel" class="glass-ui">
+        <div id="info-content">
+            <div class="node-info-title" id="info-name">File Name</div>
+            <div class="node-info-type" id="info-type">TYPE</div>
+            
+            <div class="node-info-section">
+                <label>Identifier</label>
+                <div class="node-info-value" id="info-id">path/to/file</div>
+            </div>
+            
+            <div class="node-info-section">
+                <label>Metadata</label>
+                <div class="node-info-value" id="info-stats">Size: --</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="controls" class="glass-ui">
+        <label class="control-label">Search Repository</label>
+        <input type="text" id="search-input" placeholder="Jump to node (e.g. 'proot')...">
+        <div id="filter-presets" style="margin-top: 12px; display: flex; gap: 8px;">
+            <button class="filter-chip" onclick="applyFilter('proot')">Proot Context</button>
+            <button class="filter-chip" onclick="applyFilter('extractor')">Extractors</button>
+            <button class="filter-chip" onclick="applyFilter('')">Reset</button>
+        </div>
+        <div style="margin-top: 16px; font-size: 11px; color: var(--text-secondary); line-height: 1.6;">
+            <span style="color: var(--accent-primary)">•</span> Left-click to select node<br>
+            <span style="color: var(--accent-secondary)">•</span> Right-click to focus<br>
+            <span style="color: var(--accent-tertiary)">•</span> Scroll to navigate depth
+        </div>
+    </div>
+
+    <style>
+        .filter-chip {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-secondary);
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .filter-chip:hover {
+            background: rgba(99, 102, 241, 0.2);
+            border-color: var(--accent-primary);
+            color: #fff;
+        }
+    </style>
+
+    <script>
+        const colors = {
+            1: '#94a3b8', // Directory
+            2: '#6366f1', // Python
+            3: '#f59e0b', // HTML
+            4: '#3b82f6', // CSS
+            5: '#10b981', // JS
+            6: '#ec4899', // MD
+            7: '#06b6d4', // SH
+            8: '#8b5cf6', // TXT
+            9: '#f43f5e', // JSON
+            10: '#fbbf24', // YML
+            11: '#475569'  // Other
+        };
+
+        const linkColors = {
+            'import': 'rgba(99, 102, 241, 0.15)',
+            'execution': 'rgba(34, 211, 238, 0.3)',
+            'dependency': 'rgba(236, 72, 153, 0.2)',
+            'containment': 'rgba(255, 255, 255, 0.05)'
+        };
+
+        let highlightNodes = new Set();
+        let highlightLinks = new Set();
+        let currentFilter = '';
+
+        const Graph = ForceGraph()
+            (document.getElementById('graph-container'))
+            .jsonUrl('graph_data.json')
+            .nodeLabel('id')
+            .nodeRelSize(7)
+            .linkWidth(link => highlightLinks.has(link) ? 3 : 1)
+            .linkDirectionalParticles(link => (highlightLinks.has(link) || link.type === 'execution') ? 4 : 0)
+            .linkDirectionalParticleWidth(2)
+            .linkDirectionalParticleSpeed(link => link.type === 'execution' ? 0.01 : 0.005)
+            .linkColor(link => {
+                if (highlightLinks.has(link)) return '#6366f1';
+                return linkColors[link.type] || linkColors.containment;
+            })
+            .linkDirectionalArrowLength(link => ['import', 'execution', 'dependency'].includes(link.type) ? 5 : 0)
+            .linkDirectionalArrowRelPos(1)
+            .onNodeHover(node => {
+                if (currentFilter) return; // Don't override filter on hover
+                highlightNodes.clear();
+                highlightLinks.clear();
+                if (node) {
+                    highlightNodes.add(node);
+                    const { links } = Graph.graphData();
+                    links.forEach(link => {
+                        if (link.source.id === node.id || link.target.id === node.id) {
+                            highlightLinks.add(link);
+                            highlightNodes.add(link.source);
+                            highlightNodes.add(link.target);
+                        }
+                    });
+                }
+                updateStyles();
+            })
+            .onNodeClick(node => {
+                showInfo(node);
+                Graph.centerAt(node.x, node.y, 1000);
+                Graph.zoom(3, 1000);
+            })
+            .onBackgroundClick(() => {
+                document.getElementById('info-panel').style.display = 'none';
+                if (currentFilter) {
+                    currentFilter = '';
+                    highlightNodes.clear();
+                    highlightLinks.clear();
+                    updateStyles();
+                }
+            });
+
+        function applyFilter(query) {
+            currentFilter = query.toLowerCase();
+            highlightNodes.clear();
+            highlightLinks.clear();
+            
+            if (currentFilter) {
+                const { nodes, links } = Graph.graphData();
+                nodes.forEach(n => {
+                    if (n.id.toLowerCase().includes(currentFilter) || n.name.toLowerCase().includes(currentFilter) || (n.is_proot && currentFilter === 'proot')) {
+                        highlightNodes.add(n);
+                    }
+                });
+                
+                links.forEach(l => {
+                    if (highlightNodes.has(l.source) || highlightNodes.has(l.target)) {
+                        if (l.type !== 'containment' || highlightNodes.has(l.source) && highlightNodes.has(l.target)) {
+                            highlightLinks.add(l);
+                            highlightNodes.add(l.source);
+                            highlightNodes.add(l.target);
+                        }
+                    }
+                });
+            }
+            updateStyles();
+            
+            if (highlightNodes.size > 0) {
+                // Fit to view
+                Graph.zoomToFit(1000, 100);
+            }
+        }
+
+        function updateStyles() {
+            Graph.nodeCanvasObject((node, ctx, globalScale) => {
+                const label = node.name;
+                const fontSize = 12/globalScale;
+                const isHighlighted = highlightNodes.has(node);
+                const isProot = node.is_proot || node.id.includes('proot');
+                
+                // Shadow / Glow
+                if (isHighlighted || node.group === 2 || isProot) {
+                    ctx.shadowColor = isProot ? '#22d3ee' : colors[node.group];
+                    ctx.shadowBlur = isHighlighted ? 20 : 10;
+                } else {
+                    ctx.shadowBlur = 0;
+                }
+
+                // Node Circle
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, (node.val || 6) * (isHighlighted ? 1.3 : 1), 0, 2 * Math.PI, false);
+                ctx.fillStyle = isProot ? '#22d3ee' : (colors[node.group] || '#475569');
+                
+                // Alpha management
+                if ((highlightNodes.size > 0 || currentFilter) && !isHighlighted) {
+                    ctx.globalAlpha = 0.1;
+                } else {
+                    ctx.globalAlpha = 1;
+                }
+                
+                ctx.fill();
+                
+                // Ring for proot
+                if (isProot) {
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 2/globalScale;
+                    ctx.stroke();
+                }
+                
+                ctx.globalAlpha = 1;
+
+                // Label
+                if (globalScale > 2 || isHighlighted) {
+                    ctx.font = `${isHighlighted ? '700' : '400'} ${fontSize}px 'Plus Jakarta Sans'`;
+                    ctx.fillStyle = isHighlighted ? '#fff' : 'rgba(255, 255, 255, 0.7)';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(label, node.x, node.y + (node.val || 6) + 8);
+                }
+            });
+        }
+
+        updateStyles();
+
+        function showInfo(node) {
+            const panel = document.getElementById('info-panel');
+            document.getElementById('info-name').textContent = node.name;
+            document.getElementById('info-type').textContent = node.type === 'directory' ? 'Directory' : node.name.split('.').pop().toUpperCase();
+            document.getElementById('info-id').textContent = node.id;
+            
+            let stats = '';
+            if (node.type === 'file') {
+                const size = node.size > 1024 ? (node.size / 1024).toFixed(1) + ' KB' : node.size + ' Bytes';
+                stats = `Size: ${size}`;
+            } else {
+                stats = 'Container';
+            }
+            document.getElementById('info-stats').textContent = stats;
+            
+            panel.style.display = 'block';
+            panel.classList.remove('animate-slide-in');
+            void panel.offsetWidth;
+            panel.classList.add('animate-slide-in');
+        }
+
+        document.getElementById('search-input').addEventListener('input', e => {
+            const val = e.target.value.toLowerCase();
+            if (!val) return;
+            
+            const { nodes } = Graph.graphData();
+            const node = nodes.find(n => n.id.toLowerCase().includes(val) || n.name.toLowerCase().includes(val));
+            
+            if (node) {
+                Graph.centerAt(node.x, node.y, 1000);
+                Graph.zoom(3, 1000);
+                showInfo(node);
+            }
+        });
+
+        window.addEventListener('resize', () => {
+            Graph.width(window.innerWidth);
+            Graph.height(window.innerHeight);
+        });
+    </script>
+</body>
+</html>

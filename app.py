@@ -172,6 +172,11 @@ def create_app():
 
     # ✅ NUOVO: Endpoint per ottenere l'IP pubblico
     app.router.add_get('/proxy/ip', proxy.handle_proxy_ip)
+    
+    # ✅ Graphify: Visualization tool
+    async def handle_graphify(request):
+        return web.FileResponse(os.path.join(static_path, 'graphify.html'))
+    app.router.add_get('/graphify', handle_graphify)
     # Setup recording/DVR routes (only if enabled)
     if DVR_ENABLED:
         setup_recording_routes(app, recording_manager, tvvoo_manager)
