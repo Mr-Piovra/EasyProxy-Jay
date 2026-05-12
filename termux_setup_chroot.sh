@@ -221,9 +221,9 @@ if [ -f "$FLARE_UTILS" ]; then
 
     # Aggiunge --no-zygote e --disable-setuid-sandbox dopo --no-sandbox se non presenti
     if ! su -c "grep -q 'no-zygote' '$FLARE_UTILS'" 2>/dev/null; then
-        su -c "sed -i \"s|options.add_argument('--no-sandbox')|options.add_argument('--no-sandbox'); options.add_argument('--no-zygote'); options.add_argument('--disable-setuid-sandbox')|\" '$FLARE_UTILS'" 2>/dev/null || \
+        su -c "sed -i \"s|options.add_argument('--no-sandbox')|options.add_argument('--no-sandbox'); options.add_argument('--no-zygote'); options.add_argument('--disable-setuid-sandbox'); options.add_argument('--disable-extensions')|\" '$FLARE_UTILS'" 2>/dev/null || \
             warn "Patch --no-zygote fallita — aggiungila manualmente a utils.py"
-        log "FlareSolverr: aggiunti --no-zygote e --disable-setuid-sandbox."
+        log "FlareSolverr: aggiunti --no-zygote, --disable-setuid-sandbox, --disable-extensions."
     else
         log "FlareSolverr: --no-zygote già presente."
     fi
@@ -265,6 +265,14 @@ export PORT=7860
 export ENABLE_WARP=false
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONUNBUFFERED=1
+# Variabili critiche per Chromium in CHRoot:
+# - TMPDIR: Chrome scrive file temporanei qui (default /tmp)
+# - XDG_RUNTIME_DIR: senza questa, Chrome prova /run/user/0/ che non esiste → crash
+# - DBUS_SESSION_BUS_ADDRESS: sopprime tentativi di connessione dbus (non fatali ma rallentano l'init)
+export TMPDIR=/tmp
+export XDG_RUNTIME_DIR=/tmp/xdg-runtime
+export DBUS_SESSION_BUS_ADDRESS=disabled:0
+mkdir -p /tmp/xdg-runtime
 
 LOG_DIR="/root/.easyproxy"
 LOG_FILE="$LOG_DIR/easyproxy.log"
@@ -296,7 +304,12 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] EasyProxy CHRoot bootstrap"
 echo "=================================================="
 
 # ── Rileva Chromium ───────────────────────────────────────
-if [ -f "/usr/bin/chromium" ]; then
+# IMPORTANTE: usa il binario REALE (/usr/lib/chromium/chromium), non il wrapper
+# shell (/usr/bin/chromium). Il wrapper aggiunge --load-extension e
+# --enable-remote-extensions da /etc/chromium.d/ che causano crash in CHRoot.
+if [ -f "/usr/lib/chromium/chromium" ]; then
+    export CHROME_BIN="/usr/lib/chromium/chromium"
+elif [ -f "/usr/bin/chromium" ]; then
     export CHROME_BIN="/usr/bin/chromium"
 elif [ -f "/usr/bin/chromium-browser" ]; then
     export CHROME_BIN="/usr/bin/chromium-browser"
