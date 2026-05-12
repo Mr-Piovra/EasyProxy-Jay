@@ -106,7 +106,9 @@ fi
 # ─── PHASE 3: Directory mount points ───────────────────────
 step "Phase 3/9: Creazione directory mount points"
 
-for DIR in proc sys dev dev/pts dev/shm sdcard; do
+# NOTA: dev/shm NON viene creata qui perché verrà nascosta dal successivo
+# bind mount di /dev. Viene creata DOPO il bind in Phase 4.
+for DIR in proc sys dev dev/pts sdcard; do
     su -c "mkdir -p '${CHROOT_LINK}/${DIR}'"
     log "  ✓ ${CHROOT_LINK}/${DIR}"
 done
@@ -114,30 +116,64 @@ done
 # ─── PHASE 4: Test mount + verifica CHRoot ──────────────────
 step "Phase 4/9: Test mount e sanity check CHRoot"
 
-# Funzione mount idempotente
+# Porta SELinux in Permissive PRIMA dei mount (obbligatorio su MIUI enforcing)
+# Questo è il motivo più comune per cui chroot fallisce su Android
+su -c "setenforce 0" 2>/dev/null || warn "setenforce 0 fallito (SELinux già permissive o non disponibile)"
+info "SELinux impostato a Permissive per il test."
+
+# Funzione mount con log dell'errore reale
 do_mount() {
     local OPTS="$1"; local SRC="$2"; local DST="$3"
-    su -c "mountpoint -q '$DST' || mount $OPTS '$SRC' '$DST'" 2>/dev/null || \
-        warn "Mount fallito: $DST (può essere già montato)"
+    local OUT
+    OUT=$(su -c "mountpoint -q '$DST' && echo already_mounted || mount $OPTS '$SRC' '$DST'" 2>&1)
+    local RC=$?
+    if echo "$OUT" | grep -q already_mounted; then
+        info "Already mounted (skip): $DST"
+    elif [ $RC -ne 0 ]; then
+        warn "Mount fallito per '$DST': $OUT"
+    fi
 }
 
-do_mount "-t proc"   "proc"           "${CHROOT_LINK}/proc"
-do_mount "-t sysfs"  "sysfs"          "${CHROOT_LINK}/sys"
-do_mount "--bind"    "/dev"           "${CHROOT_LINK}/dev"
-do_mount "-t devpts" "devpts"         "${CHROOT_LINK}/dev/pts"
+do_mount "-t proc"   "proc"   "${CHROOT_LINK}/proc"
+do_mount "-t sysfs"  "sysfs"  "${CHROOT_LINK}/sys"
+
+# Bind /dev prima, poi crea /dev/shm DENTRO il bind (Android /dev non ha shm)
+su -c "mountpoint -q '${CHROOT_LINK}/dev' || mount --bind /dev '${CHROOT_LINK}/dev'" 2>/dev/null \
+    || warn "Bind /dev fallito"
+
+# Crea /dev/shm ora che /dev è bindato (crea nella /dev di Android, che è ok con root)
+su -c "mkdir -p '${CHROOT_LINK}/dev/shm'" 2>/dev/null \
+    || warn "mkdir /dev/shm fallito"
+
+do_mount "-t devpts" "devpts" "${CHROOT_LINK}/dev/pts"
 do_mount "-t tmpfs -o size=256M" "tmpfs" "${CHROOT_LINK}/dev/shm"
 
-# Test CHRoot
-CHROOT_ARCH=$(su -c "chroot '${CHROOT_LINK}' uname -m" 2>/dev/null || echo "FAILED")
-if [ "$CHROOT_ARCH" != "aarch64" ]; then
-    err "CHRoot test fallito (risultato: '$CHROOT_ARCH'). Controlla i permessi su /data/local."
+# Risolvi il symlink per il test chroot (alcune versioni di chroot non seguono symlink)
+CHROOT_TARGET=$(su -c "readlink -f '${CHROOT_LINK}'" 2>/dev/null || echo "$PROOT_ROOTFS")
+info "CHRoot target (resolved): $CHROOT_TARGET"
+
+# Test CHRoot — mostra l'errore reale senza sopprimerlo
+info "Esecuzione test chroot..."
+CHROOT_OUT=$(su -c "chroot '$CHROOT_TARGET' /bin/uname -m" 2>&1)
+CHROOT_RC=$?
+if [ $CHROOT_RC -ne 0 ] || [ "$CHROOT_OUT" != "aarch64" ]; then
+    echo -e "${RED}[ERR]${NC} CHRoot test fallito."
+    echo "  Output:    '$CHROOT_OUT'"
+    echo "  Exit code: $CHROOT_RC"
+    echo ""
+    echo "  Possibili cause:"
+    echo "  1. SELinux denial: controlla con 'su -c dmesg | grep avc'"
+    echo "  2. /bin/uname non eseguibile nel rootfs: verifica la data partition"
+    echo "  3. Rootfs corrotto: ri-esegui termux_setup.sh"
+    err "Setup interrotto. Risolvi il problema sopra e ri-esegui questo script."
 fi
-log "CHRoot funzionante: uname -m → $CHROOT_ARCH"
+log "CHRoot funzionante: uname -m → $CHROOT_OUT"
 
 # ─── PHASE 5: Rete Android (GID 3003 inet) ──────────────────
 step "Phase 5/9: Configurazione Android Paranoid Network (GID 3003)"
 
-su -c "chroot '${CHROOT_LINK}' bash -c '
+# Usa il target risolto (realpath) per tutte le operazioni chroot successive
+su -c "chroot '$CHROOT_TARGET' bash -c '
     # Aggiunge gruppo inet_android (GID 3003) se non esiste
     if ! grep -q \"^inet_android:\" /etc/group 2>/dev/null; then
         echo \"inet_android:x:3003:root\" >> /etc/group
@@ -163,14 +199,14 @@ DNS2=$(getprop net.dns2 2>/dev/null || echo "8.8.8.8")
 [ -z "$DNS1" ] && DNS1="1.1.1.1"
 [ -z "$DNS2" ] && DNS2="8.8.8.8"
 
-su -c "echo -e 'nameserver ${DNS1}\nnameserver ${DNS2}' > '${CHROOT_LINK}/etc/resolv.conf'"
+su -c "echo -e 'nameserver ${DNS1}\nnameserver ${DNS2}' > '${CHROOT_TARGET}/etc/resolv.conf'"
 log "resolv.conf configurato: DNS1=$DNS1, DNS2=$DNS2"
 info "(Il DNS viene aggiornato automaticamente ad ogni avvio di easyproxy)"
 
 # ─── PHASE 7: Patch FlareSolverr per /dev/shm nativo ────────
 step "Phase 7/9: Patch FlareSolverr per CHRoot (/dev/shm nativo)"
 
-FLARE_UTILS="${CHROOT_LINK}/root/EasyProxy/flaresolverr/src/utils.py"
+FLARE_UTILS="${CHROOT_TARGET}/root/EasyProxy/flaresolverr/src/utils.py"
 if [ -f "$FLARE_UTILS" ]; then
     # Rimuove --disable-dev-shm-usage ora che /dev/shm è un tmpfs reale
     su -c "sed -i \"s|options.add_argument('--disable-dev-shm-usage'); ||g\" '$FLARE_UTILS'" 2>/dev/null || true
@@ -188,7 +224,7 @@ fi
 # ─── PHASE 8: Script di avvio interno al CHRoot ─────────────
 step "Phase 8/9: Creazione easyproxy_chroot_start.sh"
 
-su -c "cat > '${CHROOT_LINK}/root/easyproxy_chroot_start.sh'" << 'CHROOT_START_EOF'
+su -c "cat > '${CHROOT_TARGET}/root/easyproxy_chroot_start.sh'" << 'CHROOT_START_EOF'
 #!/bin/bash
 # ============================================================
 # EasyProxy - Script interno CHRoot
@@ -308,13 +344,13 @@ if ! python3 app.py; then
 fi
 CHROOT_START_EOF
 
-su -c "chmod +x '${CHROOT_LINK}/root/easyproxy_chroot_start.sh'"
+su -c "chmod +x '${CHROOT_TARGET}/root/easyproxy_chroot_start.sh'"
 log "easyproxy_chroot_start.sh scritto e reso eseguibile."
 
 # ─── PHASE 9: Comandi Termux ────────────────────────────────
 step "Phase 9/9: Creazione comandi Termux (chroot edition)"
 
-CHROOT_ROOTFS_PATH="$CHROOT_LINK"
+CHROOT_ROOTFS_PATH="$CHROOT_TARGET"  # Usa il realpath (non il symlink) nei launcher
 
 # ── easyproxy ───────────────────────────────────────────────
 cat > "$PREFIX/bin/easyproxy" << EASYPROXY_EOF
@@ -357,6 +393,7 @@ su -c "
     mountpoint -q '\${ROOTFS}/proc'    || mount -t proc proc '\${ROOTFS}/proc'
     mountpoint -q '\${ROOTFS}/sys'     || mount -t sysfs sysfs '\${ROOTFS}/sys'
     mountpoint -q '\${ROOTFS}/dev'     || mount --bind /dev '\${ROOTFS}/dev'
+    mkdir -p '\${ROOTFS}/dev/shm' 2>/dev/null || true
     mountpoint -q '\${ROOTFS}/dev/pts' || mount -t devpts devpts '\${ROOTFS}/dev/pts'
     mountpoint -q '\${ROOTFS}/dev/shm' || mount -t tmpfs -o size=256M tmpfs '\${ROOTFS}/dev/shm'
     mountpoint -q '\${ROOTFS}/sdcard'  || mount --bind /sdcard '\${ROOTFS}/sdcard' 2>/dev/null || true
@@ -468,6 +505,7 @@ su -c "
     mountpoint -q '\${ROOTFS}/proc'    || mount -t proc proc '\${ROOTFS}/proc'
     mountpoint -q '\${ROOTFS}/sys'     || mount -t sysfs sysfs '\${ROOTFS}/sys'
     mountpoint -q '\${ROOTFS}/dev'     || mount --bind /dev '\${ROOTFS}/dev'
+    mkdir -p '\${ROOTFS}/dev/shm' 2>/dev/null || true
     mountpoint -q '\${ROOTFS}/dev/pts' || mount -t devpts devpts '\${ROOTFS}/dev/pts'
     mountpoint -q '\${ROOTFS}/dev/shm' || mount -t tmpfs -o size=256M tmpfs '\${ROOTFS}/dev/shm'
     mountpoint -q '\${ROOTFS}/sdcard'  || mount --bind /sdcard '\${ROOTFS}/sdcard' 2>/dev/null || true
@@ -481,16 +519,16 @@ log "Creato: easyproxy-shell (equivalente di 'proot-distro login ubuntu')"
 step "Cleanup: umount mount points di test"
 
 su -c "
-    umount '${CHROOT_LINK}/dev/shm'  2>/dev/null || true
-    umount '${CHROOT_LINK}/dev/pts'  2>/dev/null || true
-    umount '${CHROOT_LINK}/dev'      2>/dev/null || true
-    umount '${CHROOT_LINK}/sys'      2>/dev/null || true
-    umount '${CHROOT_LINK}/proc'     2>/dev/null || true
+    umount '${CHROOT_TARGET}/dev/shm'  2>/dev/null || true
+    umount '${CHROOT_TARGET}/dev/pts'  2>/dev/null || true
+    umount '${CHROOT_TARGET}/dev'      2>/dev/null || true
+    umount '${CHROOT_TARGET}/sys'      2>/dev/null || true
+    umount '${CHROOT_TARGET}/proc'     2>/dev/null || true
 " 2>/dev/null
 log "Mount di test smontati."
 
 # ── .env DVR path ─────────────────────────────────────────────
-ENV_FILE="${CHROOT_LINK}/root/EasyProxy/.env"
+ENV_FILE="${CHROOT_TARGET}/root/EasyProxy/.env"
 if [ -f "$ENV_FILE" ]; then
     if ! grep -q "RECORDINGS_DIR" "$ENV_FILE" 2>/dev/null; then
         echo "RECORDINGS_DIR=${DVR_DIR}" >> "$ENV_FILE"
