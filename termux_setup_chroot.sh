@@ -203,20 +203,46 @@ su -c "echo -e 'nameserver ${DNS1}\nnameserver ${DNS2}' > '${CHROOT_TARGET}/etc/
 log "resolv.conf configurato: DNS1=$DNS1, DNS2=$DNS2"
 info "(Il DNS viene aggiornato automaticamente ad ogni avvio di easyproxy)"
 
-# ─── PHASE 7: Patch FlareSolverr per /dev/shm nativo ────────
-step "Phase 7/9: Patch FlareSolverr per CHRoot (/dev/shm nativo)"
+# ─── PHASE 7: Patch FlareSolverr per CHRoot ─────────────────
+step "Phase 7/9: Patch FlareSolverr per ambiente CHRoot"
 
 FLARE_UTILS="${CHROOT_TARGET}/root/EasyProxy/flaresolverr/src/utils.py"
 if [ -f "$FLARE_UTILS" ]; then
-    # Rimuove --disable-dev-shm-usage ora che /dev/shm è un tmpfs reale
-    su -c "sed -i \"s|options.add_argument('--disable-dev-shm-usage'); ||g\" '$FLARE_UTILS'" 2>/dev/null || true
-    su -c "sed -i \"s|; options.add_argument('--disable-dev-shm-usage')||g\" '$FLARE_UTILS'" 2>/dev/null || true
-    # Assicura --no-sandbox (obbligatorio senza namespace)
-    if ! su -c "grep -q \"no-sandbox\" '$FLARE_UTILS'" 2>/dev/null; then
-        warn "--no-sandbox non trovato in utils.py — potrebbe causare crash di Chromium."
+    # In un CHRoot Android, Chromium necessita di flag specifici:
+    #   --no-sandbox          : già impostato dal termux_setup.sh
+    #   --disable-dev-shm-usage : MANTENIAMO — anche con /dev/shm montato, in CHRoot
+    #                             il kernel può bloccare operazioni SHM avanzate
+    #   --no-zygote           : CRITICO — il processo Zygote usa clone()+namespace
+    #                             che sono bloccati in CHRoot. Senza questo flag,
+    #                             Chromium crasha silenziosamente all'avvio.
+    #   --disable-setuid-sandbox : belt-and-suspenders con --no-sandbox
+    #   --disable-gpu         : già impostato
+    #   --headless=new        : già impostato
+
+    # Aggiunge --no-zygote e --disable-setuid-sandbox dopo --no-sandbox se non presenti
+    if ! su -c "grep -q 'no-zygote' '$FLARE_UTILS'" 2>/dev/null; then
+        su -c "sed -i \"s|options.add_argument('--no-sandbox')|options.add_argument('--no-sandbox'); options.add_argument('--no-zygote'); options.add_argument('--disable-setuid-sandbox')|\" '$FLARE_UTILS'" 2>/dev/null || \
+            warn "Patch --no-zygote fallita — aggiungila manualmente a utils.py"
+        log "FlareSolverr: aggiunti --no-zygote e --disable-setuid-sandbox."
     else
-        log "FlareSolverr: --no-sandbox presente, --disable-dev-shm-usage rimosso (ora usa tmpfs nativo)."
+        log "FlareSolverr: --no-zygote già presente."
     fi
+
+    # Assicura che --disable-dev-shm-usage sia presente (lo manteniamo in CHRoot)
+    if ! su -c "grep -q 'disable-dev-shm-usage' '$FLARE_UTILS'" 2>/dev/null; then
+        su -c "sed -i \"s|options.add_argument('--no-sandbox')|options.add_argument('--no-sandbox'); options.add_argument('--disable-dev-shm-usage')|\" '$FLARE_UTILS'" 2>/dev/null || true
+        log "FlareSolverr: --disable-dev-shm-usage aggiunto."
+    else
+        log "FlareSolverr: --disable-dev-shm-usage già presente (mantenuto)."
+    fi
+
+    # Verifica --no-sandbox obbligatorio
+    if ! su -c "grep -q 'no-sandbox' '$FLARE_UTILS'" 2>/dev/null; then
+        warn "--no-sandbox non trovato in utils.py — potrebbe causare crash di Chromium."
+    fi
+
+    info "Flag Chromium attivi in utils.py:"
+    su -c "grep \"add_argument\" '$FLARE_UTILS' | grep -E 'sandbox|shm|zygote|gpu|headless'" 2>/dev/null || true
 else
     warn "flaresolverr/src/utils.py non trovato. Verrà configurato al primo avvio."
 fi
@@ -320,9 +346,9 @@ cd /root/EasyProxy/flaresolverr && PORT=8191 python3 src/flaresolverr.py &
 FLARE_PID=$!
 cd /root/EasyProxy
 
-echo "Attesa FlareSolverr ready (max 30s)..."
+echo "Attesa FlareSolverr ready (max 60s)..."
 _flare_ready=0
-for _i in $(seq 1 30); do
+for _i in $(seq 1 60); do
     if curl -sf http://localhost:8191/health > /dev/null 2>&1; then
         echo "[OK] FlareSolverr pronto dopo ${_i}s"
         _flare_ready=1
@@ -330,7 +356,8 @@ for _i in $(seq 1 30); do
     fi
     sleep 1
 done
-[ "$_flare_ready" -eq 0 ] && echo "[WARN] FlareSolverr non ha risposto in 30s — continuo comunque"
+[ "$_flare_ready" -eq 0 ] && echo "[WARN] FlareSolverr non ha risposto in 60s — continuo comunque"
+
 
 # ── Avvia EasyProxy ───────────────────────────────────────
 echo "Avvio EasyProxy su porta $PORT..."
