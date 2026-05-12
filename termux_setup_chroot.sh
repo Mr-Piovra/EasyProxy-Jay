@@ -173,7 +173,7 @@ log "CHRoot funzionante: uname -m → $CHROOT_OUT"
 step "Phase 5/9: Configurazione Android Paranoid Network (GID 3003)"
 
 # Usa il target risolto (realpath) per tutte le operazioni chroot successive
-su -c "chroot '$CHROOT_TARGET' bash -c '
+su -c "chroot '$CHROOT_TARGET' /bin/bash -c '
     # Aggiunge gruppo inet_android (GID 3003) se non esiste
     if ! grep -q \"^inet_android:\" /etc/group 2>/dev/null; then
         echo \"inet_android:x:3003:root\" >> /etc/group
@@ -477,7 +477,7 @@ echo "Aggiornamento EasyProxy (CHRoot)..."
 easyproxy-stop 2>/dev/null || true
 sleep 2
 
-su -c "chroot '\${ROOTFS}' bash -c '
+su -c "chroot '\${ROOTFS}' /bin/bash -c '
     cd /root/EasyProxy &&
     git fetch &&
     git reset --hard origin/main &&
