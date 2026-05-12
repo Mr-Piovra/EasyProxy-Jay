@@ -319,13 +319,28 @@ RECORDINGS_DIR=/sdcard/Movies/EasyProxy   # path su sdcard (opzionale)
 
 Poi riavviare: `easyproxy-stop && easyproxy`
 
-### Comportamento attuale (post-ripristino a commit a110137)
+### Comportamento attuale (CHRoot)
 - Le registrazioni vengono salvate come **singoli file `.ts`** (MPEG-TS)
-- FFmpeg registra direttamente senza segmentazione
-- L'auto-record (registrazione automatica delle dirette guardate) è disponibile
-  e si gestisce via UI in `/recordings`
-- Il formato `.ts` **non supporta seek in VLC** su file in crescita o completati
-  senza indice. Considerare la migrazione a MP4 frammentato se il seek è necessario.
+- FFmpeg registra con `-c copy` (zero re-encoding) → uso CPU minimo
+- Al completamento/stop, viene avviato automaticamente il remux `.ts` → `.mp4` con:
+  - `-c copy` (nessuna transcoding)
+  - `-avoid_negative_ts make_zero` (fix timestamp negativi da stream live)
+  - `-movflags +faststart` (moov atom in testa: seek immediato in VLC/browser)
+- Il file `.ts` originale viene eliminato dopo remux riuscito
+- Il DVR mostra il progresso del remux in percentuale nel DB
+
+### Hardware acceleration DVR
+
+| Operazione | Metodo | HW Accel? |
+|-----------|--------|----------|
+| Recording (live→TS) | `-c copy` (mux solo) | N/A — ottimale |
+| Remux TS→MP4 | `-c copy +faststart` | N/A — ottimale |
+| Transcode → HEVC | `termux_transcode.sh` via Termux nativo | **Sì (MediaCodec)** |
+
+Per transcoding HEVC hardware-accelerato (opzionale, fuori CHRoot):
+```bash
+bash ~/EasyProxy/termux_transcode.sh /sdcard/Movies/EasyProxy_DVR/recording.mp4
+```
 
 ### Comandi utili per il DVR da Termux
 ```bash
@@ -345,13 +360,30 @@ sqlite3 /root/EasyProxy/recordings/recordings.db "SELECT id,name,status,file_pat
 ## 11. FlareSolverr
 
 FlareSolverr è un server headless che bypass Cloudflare usando Chromium.
-Gira su `http://localhost:8191` e viene avviato automaticamente da `easyproxy_start.sh`.
+Gira su `http://localhost:8191` e viene avviato automaticamente da `easyproxy_chroot_start.sh`.
 
-- Usa il Chromium di sistema (`/usr/bin/chromium`) invece di scaricarne uno → risparmia ~500MB
-- Modifiche applicate a `flaresolverr/src/utils.py` durante il setup:
-  - `--no-sandbox`, `--disable-dev-shm-usage`, `--disable-gpu`, `--headless=new`
-  - Rimossa chiamata a `start_xvfb_display()` (non serve in headless)
-  - Hardcoded `chromedriver` path a `/usr/bin/chromedriver`
+**Chromium path (CHRoot):**
+- Usa il **binario reale** `/usr/lib/chromium/chromium` (NON il wrapper `/usr/bin/chromium`)
+- Il wrapper aggiunge `--load-extension` da `/etc/chromium.d/extensions` che crashano Chrome in CHRoot
+- `CHROME_BIN=/usr/lib/chromium/chromium` è impostato in `easyproxy_chroot_start.sh`
+
+Flag Chromium iniettati via patch su `flaresolverr/src/utils.py`:
+```python
+options.add_argument('--no-sandbox')
+options.add_argument('--no-zygote')           # bypassa clone() namespace (kernel 4.9)
+options.add_argument('--disable-setuid-sandbox')
+options.add_argument('--disable-extensions')  # evita crash da estensioni in CHRoot
+options.add_argument('--disable-gpu')
+options.add_argument('--headless=new')
+options.add_argument('--disable-dev-shm-usage')  # usa /dev/shm tmpfs reale
+```
+
+Variabili d'ambiente critiche esportate prima dell'avvio:
+```bash
+export TMPDIR=/tmp
+export XDG_RUNTIME_DIR=/tmp/xdg-runtime
+export DBUS_SESSION_BUS_ADDRESS=disabled:0
+```
 
 ---
 
@@ -569,7 +601,136 @@ curl -sL "https://raw.githubusercontent.com/Mr-Piovra/EasyProxy-Jay/main/termux_
 # Sanity check in sequenza:
 su -c "chroot /data/local/easyproxy-rootfs uname -m"    # aarch64
 su -c "chroot /data/local/easyproxy-rootfs python3 --version"
-su -c "chroot /data/local/easyproxy-rootfs chromium --version --no-sandbox"
+su -c "chroot /data/local/easyproxy-rootfs /usr/lib/chromium/chromium --version --no-sandbox"
 curl -sf http://localhost:8191/health   # {"status":"ok"}
 curl -sf http://localhost:7860/         # HTML dashboard
+```
+
+---
+
+## 17. tvvoo — Stremio Vavoo Addon (CHRoot)
+
+tvvoo è uno Stremio addon Node.js che risolve i canali Vavoo e li instrada attraverso EasyProxy. Gira nello stesso CHRoot Ubuntu di EasyProxy sulla porta `7019`.
+
+### Architettura tvvoo + EasyProxy
+
+```
+Stremio client
+  │
+  ├─ GET /catalog/... → tvvoo:7019 (catalogo canali Vavoo, cache disk giornaliera)
+  │
+  └─ GET /stream/...  → tvvoo:7019
+        │  risolve token Vavoo → URL EasyProxy wrappato
+        ↓
+      Stremio riceve: https://jayandroidproxy.dpdns.org/proxy/hls/manifest.m3u8?d=<vavoo-url>
+        │
+        └─ EasyProxy:7860 → CDN Vavoo (con VPN, IP server) → HLS prefetch → Stremio
+```
+
+**Caratteristiche:**
+- Token Vavoo risolti con l'IP del device (nessun geo-block da IP server remoto)
+- Cache catalogo su disco con refresh giornaliero automatico alle 02:00
+- `node-cron` integrato per refresh cache
+- Auto-update da GitHub ogni 24h: check commit → `git pull` → `npm run build` → restart
+
+### Setup
+
+```bash
+curl -sL "https://raw.githubusercontent.com/Mr-Piovra/EasyProxy-Jay/main/termux_setup_tvvoo.sh" | bash
+```
+
+| Fase | Cosa fa |
+|------|---------|
+| 1/6 | Verifica prerequisiti + mount CHRoot attivi |
+| 2/6 | Installa Node.js 18 LTS da binary ufficiale (`nodejs.org/dist`) se non presente |
+| 3/6 | `git clone https://github.com/qwertyuiop8899/tvvoo` o `git fetch + reset --hard` |
+| 4/6 | `npm install --include=dev` (include TypeScript) + `npm run build` (tsc → dist/) |
+| 5/6 | Scrive `/root/tvvoo_chroot_start.sh` nel rootfs CHRoot |
+| 6/6 | Crea comandi Termux: `tvvoo`, `tvvoo-stop`, `tvvoo-logs`, `tvvoo-update`, `tvvoo-shell` |
+
+> **NOTA:** `NODE_ENV=production` NON deve essere impostato durante il build — TypeScript è in `devDependencies` e verrebbe saltato causando `tsc: not found`.
+
+### File e percorsi tvvoo
+
+| Cosa | Percorso |
+|------|----------|
+| Source tvvoo | `[ubuntu-root]/root/tvvoo/` |
+| Build output | `[ubuntu-root]/root/tvvoo/dist/addon.js` |
+| Script avvio | `[ubuntu-root]/root/tvvoo_chroot_start.sh` |
+| Log | `[ubuntu-root]/root/.tvvoo/tvvoo.log` |
+| PID file | `[ubuntu-root]/root/.tvvoo/tvvoo.pid` |
+| Cache catalogo | `[ubuntu-root]/root/tvvoo/dist/cache/` |
+
+### Comandi Termux (tvvoo)
+
+| Comando | Funzione |
+|---------|----------|
+| `tvvoo` | Avvia tvvoo in sessione screen dedicata (`screen -S tvvoo`) |
+| `tvvoo-stop` | Termina sessione screen + pkill processi node |
+| `tvvoo-logs` | `tail -f` del log dentro il CHRoot |
+| `tvvoo-update` | Stop → check commit GitHub → git pull → npm build → restart |
+| `tvvoo-shell` | Shell interattiva dentro CHRoot (stesso di `easyproxy-shell`) |
+
+### Auto-update giornaliero
+
+`tvvoo_chroot_start.sh` avvia un loop in background che ogni 24h:
+1. Confronta `git rev-parse HEAD` con `git ls-remote origin main`
+2. Se diversi: `git fetch && git reset --hard origin/main`
+3. `npm install --include=dev && npm run build`
+4. Kill processo node corrente + restart
+
+### Configurazione URL proxy in tvvoo
+
+Nella landing page di tvvoo (`https://<your-tvvoo-domain>/configure`), imposta:
+- **MediaFlow Proxy URL**: `https://jayandroidproxy.dpdns.org`
+- **Tipo proxy**: EasyProxy
+
+Usa sempre l'URL esterno (non `localhost`) anche se tvvoo e EasyProxy sono sullo stesso device: gli stream vengono serviti a Stremio su dispositivi remoti che non raggiungono `localhost`.
+
+### Cloudflare Tunnel (tvvoo)
+
+```
+jayandroidtvvoo.dpdns.org → Cloudflare Tunnel → localhost:7019 (tvvoo)
+jayandroidproxy.dpdns.org → Cloudflare Tunnel → localhost:7860 (EasyProxy)
+```
+
+Stesso tunnel, stesso `cloudflared` process, configurazione ingress multipla.
+
+### Troubleshooting tvvoo
+
+**`dist/addon.js non trovato`**
+```bash
+# Build manuale con devDependencies
+su -c "chroot /data/local/easyproxy-rootfs /bin/bash -c '
+    export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    cd /root/tvvoo
+    npm install --include=dev
+    npm run build
+    ls dist/addon.js
+'"
+```
+
+**`tsc: not found` durante build**
+```bash
+# NODE_ENV=production salta devDependencies (TypeScript)
+# Fix: usa --include=dev esplicitamente (vedi sopra)
+```
+
+**Node.js non trovato / versione troppo bassa**
+```bash
+# Installa Node.js 18 da binary ufficiale (no apt, più veloce e affidabile)
+su -c "chroot /data/local/easyproxy-rootfs /bin/bash -c '
+    export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    NODE_VER=18.20.7
+    wget -q https://nodejs.org/dist/v\${NODE_VER}/node-v\${NODE_VER}-linux-arm64.tar.xz -O /tmp/node.tar.xz
+    tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
+    rm /tmp/node.tar.xz
+    node --version
+'"
+```
+
+**DNS failure durante npm install (VPN attiva)**
+```bash
+# Aggiorna resolv.conf con DNS pubblici
+su -c "echo -e 'nameserver 1.1.1.1\nnameserver 8.8.8.8' > /data/local/easyproxy-rootfs/etc/resolv.conf"
 ```

@@ -87,9 +87,49 @@ Best performance on rooted Android. Uses a real kernel `chroot` via Magisk root 
 | `easyproxy-update` | Pull latest code and restart |
 | `easyproxy-shell` | Enter Ubuntu CHRoot interactively |
 
-**DVR:** Recordings are saved to `/sdcard/Movies/EasyProxy_DVR` by default.
+**DVR:** Recordings saved to `/sdcard/Movies/EasyProxy_DVR`. Remuxed to `.mp4` with `-movflags +faststart` for immediate seek in VLC/browsers.
 
-> **Anti-sleep:** Disable battery optimization for Termux in Phone Settings → Apps → Termux → Battery → **Unrestricted**. Acquire the wake-lock from Termux's notification.
+> **Anti-sleep:** Disable battery optimization for Termux → Phone Settings → Apps → Termux → Battery → **Unrestricted**.
+
+---
+
+#### 📱 Android — tvvoo Stremio Addon (optional, same CHRoot)
+
+Hosts the [tvvoo](https://github.com/qwertyuiop8899/tvvoo) Stremio Vavoo addon on the same device (Node.js 18, port 7019). Streams are resolved locally with your device IP and routed through EasyProxy.
+
+```bash
+curl -sL "https://raw.githubusercontent.com/Mr-Piovra/EasyProxy-Jay/main/termux_setup_tvvoo.sh" | bash
+```
+
+| Command | Description |
+| :--- | :--- |
+| `tvvoo` | Start tvvoo addon |
+| `tvvoo-stop` | Stop tvvoo |
+| `tvvoo-logs` | Follow tvvoo logs |
+| `tvvoo-update` | Check GitHub for updates, rebuild, restart |
+| `tvvoo-shell` | Interactive shell inside CHRoot |
+
+Stremio manifest: `https://<your-domain>/manifest.json`  
+Auto-update: checks GitHub every 24h — if new commits found, rebuilds and restarts automatically.
+
+---
+
+#### 📱 Android — Auto-startup Script
+
+Create `~/startup.sh` to auto-start everything on boot via [Termux:Boot](https://f-droid.org/packages/com.termux.boot/):
+
+```bash
+#!/data/data/com.termux/files/usr/bin/sh
+export PATH=/data/data/com.termux/files/usr/bin:$PATH
+termux-wake-lock
+
+pkill -9 -f "cloudflared|easyproxy|tvvoo|proot|screen|python|node" > /dev/null 2>&1
+rm -rf ~/.screen/* && screen -wipe > /dev/null 2>&1
+
+sleep 25 && easyproxy &
+sleep 5  && tvvoo &
+sleep 15 && cloudflared tunnel run --protocol http2 --token <YOUR_TOKEN> &
+```
 
 ---
 
@@ -114,7 +154,7 @@ Commands are identical: `easyproxy`, `easyproxy-stop`, `easyproxy-logs`, `easypr
 | :--- | :---: | :---: |
 | Syscall overhead | High (`ptrace`) | **Zero (native)** |
 | HLS proxy CPU usage | Baseline | **~40-50% less** |
-| FlareSolverr startup | 15-30s | **5-10s** |
+| FlareSolverr startup | 15-30s | **4-5s** |
 | Chromium stability | Moderate | **High** |
 | DVR I/O (sdcard write) | Slow (FUSE+proot) | **Fast (bind mount)** |
 | Root required | No | **Yes (Magisk)** |
