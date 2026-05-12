@@ -19,4 +19,4 @@ tvvoo &
 
 # 3. ATTESA E AVVIO CLOUDFLARE (Ulteriori 15s, totale ~45s dal boot)
 sleep 15
-cloudflared tunnel run --protocol http2 --token eyJhIjoiOTkwYTM1MmY0ZmRkYzhkYTRlM2VmNmI1YTI5ZjE3N2IiLCJ0IjoiYzYxMWI1YjUtODQwOS00MmYzLTliOGUtM2M1ZDJiMzVhNTgzIiwicyI6IlpURTRNamc1T1RJdE9EWmlNUzAwTlRKa0xUaGpORGd0WmpGak1HVTRaamd6TVdJNSJ9 &
+cloudflared tunnel run --protocol http2 --token [TOKEN] &
