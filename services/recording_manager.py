@@ -580,11 +580,15 @@ class RecordingManager:
         output_path = input_path.replace('.ts', '.mp4')
         if output_path == input_path:
             output_path = input_path + '.mp4'
-            
+
         cmd = [
             "ffmpeg", "-hide_banner", "-y",
             "-i", input_path,
             "-c", "copy",
+            # Fix negative timestamps from live HLS streams (common in DVR recordings)
+            "-avoid_negative_ts", "make_zero",
+            # Move moov atom to start: enables streaming/seeking before full download in VLC/browsers
+            "-movflags", "+faststart",
             "-progress", "pipe:1",
             output_path
         ]
