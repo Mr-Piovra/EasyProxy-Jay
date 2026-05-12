@@ -511,18 +511,27 @@ log "Creato: easyproxy-logs"
 # ── easyproxy-update ────────────────────────────────────────
 cat > "$PREFIX/bin/easyproxy-update" << UPDATE_EOF
 #!/data/data/com.termux/files/usr/bin/bash
-ROOTFS="${CHROOT_ROOTFS_PATH}"
+ROOTFS="\$(readlink -f /data/local/easyproxy-rootfs)"
 
 echo "Aggiornamento EasyProxy (CHRoot)..."
+echo "Stop EasyProxy..."
 easyproxy-stop 2>/dev/null || true
 sleep 2
 
 su -c "chroot '\${ROOTFS}' /bin/bash -c '
+    export HOME=/root
+    export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    export TMPDIR=/tmp
+    export DEBIAN_FRONTEND=noninteractive
+
+    # Installa git se non presente (primo run dopo setup)
+    command -v git >/dev/null 2>&1 || apt-get install -y git --quiet 2>&1
+
     cd /root/EasyProxy &&
-    git fetch &&
+    git fetch --quiet &&
     git reset --hard origin/main &&
-    pip install -r requirements.txt --upgrade --break-system-packages --quiet
-    echo Aggiornamento completato.
+    pip install -r requirements.txt --upgrade --break-system-packages --quiet &&
+    echo \"[OK] Aggiornamento completato.\"
 '"
 
 echo "Riavvio EasyProxy..."
