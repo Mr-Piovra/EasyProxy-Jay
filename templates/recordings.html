@@ -716,6 +716,11 @@
             const name = document.getElementById('name').value;
             const duration = document.getElementById('duration').value;
 
+            if (url === 'Risoluzione url in corso...') {
+                showToast('Attendere il completamento della risoluzione URL', 'error');
+                return;
+            }
+
             const startBtn = document.getElementById('startBtn');
             startBtn.disabled = true;
             startBtn.innerHTML = '<span>Starting...</span>';
@@ -894,6 +899,7 @@
             
             urlInput.value = 'Risoluzione url in corso...';
             urlInput.disabled = true;
+            document.getElementById('startBtn').disabled = true;
             
             try {
                 const resolveUrl = `/api/tvvoo/resolve${getAuthParams()}${getAuthParams() ? '&' : '?'}name=${encodeURIComponent(channelName)}`;
@@ -910,6 +916,7 @@
                 showToast(e.message, 'error');
             } finally {
                 urlInput.disabled = false;
+                document.getElementById('startBtn').disabled = false;
             }
         }
 
