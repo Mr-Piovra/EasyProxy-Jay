@@ -436,6 +436,8 @@ class HLSProxy:
         # Ultimo manifest raw visto per ciascun base-URL CDN (per estrarre next segment)
         # Struttura: cdn_base -> (manifest_text, fetch_time)
         self.last_manifest_by_cdn: dict = {}
+        # Set dei CDN host per cui è già attivo un ProactiveRefresh (dedup)
+        self._proactive_refresh_active: set = set()
 
     # ---------------------------------------------------------------------------
     # Segment Prefetch
@@ -500,14 +502,14 @@ class HLSProxy:
                         return absolute_segments[i + 1]
                     return None  # Siamo all'ultimo segmento del manifest
 
-            # Fallback: se il segmento corrente non si trova nel manifest
-            # (es. manifest aggiornato), ritorna il PRIMO segmento della lista
-            # come best-effort (il player lo chiederà presto)
+            # Fallback: segmento corrente non trovato nel manifest (manifest stale
+            # o nuovo segmento non ancora pubblicato dal CDN).
+            # Ritorniamo None per delegare al ProactiveRefresh con retry.
             logger.debug(
                 f"[Prefetch] Segmento corrente non trovato nel manifest, "
-                f"prefetch del primo segmento disponibile"
+                f"ProactiveRefresh gestirà il next-segment"
             )
-            return absolute_segments[0] if absolute_segments else None
+            return None
 
         except Exception as e:
             logger.debug(f"[Prefetch] Errore parsing manifest per next-segment: {e}")
@@ -608,103 +610,120 @@ class HLSProxy:
         disable_ssl: bool,
         bypass_warp: bool,
         delay: float = 4.0,
+        last_known_seg_path: str = None,
+        max_retries: int = 5,
+        retry_delay: float = 2.0,
     ) -> None:
         """
-        ✅ FIX FREEZE: quando abbiamo servito l'ultimo segmento della finestra manifest,
-        re-fetcha il manifest CDN dopo `delay` secondi (anziché aspettare il poll del client
-        che avviene solo dopo ~10s = durata di un segmento).
+        ✅ FIX FREEZE: dopo aver servito l'ultimo segmento della finestra manifest,
+        re-fetcha il manifest CDN con retry finché il CDN non pubblica un nuovo segmento.
 
-        Questo riduce il freeze da ~10s a ~delay+download_time ≈ 4-5s.
-        Fire-and-forget: qualsiasi errore viene loggato e ignorato.
+        Retry loop: aspetta `delay` s, fetcha manifest, se il CDN ha ancora lo stesso
+        ultimo segmento riprova ogni `retry_delay` s fino a `max_retries` volte.
+        Questo elimina il freeze anche quando il CDN è lento a pubblicare il segmento.
+        Dedup per CDN host: un solo task attivo alla volta.
         """
+        import urllib.parse as _up_pmr
+        import yarl as _yarl_pmr
+
+        parsed_mf = _up_pmr.urlparse(manifest_url)
+        cdn_host = parsed_mf.netloc
+        cdn_base = f"{parsed_mf.scheme}://{cdn_host}"
+        mf_dir = cdn_base + parsed_mf.path.rsplit("/", 1)[0] + "/"
+
+        # Dedup: un solo ProactiveRefresh attivo per CDN host
+        if cdn_host in self._proactive_refresh_active:
+            logger.debug(f"[ProactiveRefresh] Già attivo per {cdn_host} — skip")
+            return
+        self._proactive_refresh_active.add(cdn_host)
+
         try:
             await asyncio.sleep(delay)
 
-            import urllib.parse as _up_pmr
-            import yarl as _yarl_pmr
-
-            _req_target = _yarl_pmr.URL(manifest_url, encoded=True)
-            req_headers = dict(manifest_headers)
-
-            async with session.get(
-                _req_target,
-                headers=req_headers,
-                ssl=not disable_ssl,
-            ) as resp:
-                if resp.status not in (200, 206):
-                    logger.debug(
-                        f"[ProactiveRefresh] Manifest upstream {resp.status} — skip"
-                    )
-                    return
-
-                content_bytes = await resp.read()
+            for attempt in range(max_retries + 1):
                 try:
+                    _req_target = _yarl_pmr.URL(manifest_url, encoded=True)
+                    async with session.get(
+                        _req_target,
+                        headers=dict(manifest_headers),
+                        ssl=not disable_ssl,
+                    ) as resp:
+                        if resp.status not in (200, 206):
+                            logger.debug(f"[ProactiveRefresh] Upstream {resp.status} attempt {attempt} — abort")
+                            return
+                        content_bytes = await resp.read()
+
                     manifest_text = content_bytes.decode("utf-8", errors="replace")
-                except Exception:
-                    return
+                    if not manifest_text.lstrip().startswith("#EXTM3U"):
+                        return
 
-                if not manifest_text.lstrip().startswith("#EXTM3U"):
-                    logger.debug("[ProactiveRefresh] Risposta non-manifest — skip")
-                    return
+                    seg_lines = [
+                        line.strip()
+                        for line in manifest_text.splitlines()
+                        if line.strip()
+                        and not line.strip().startswith("#")
+                        and (line.strip().endswith(".ts") or line.strip().endswith(".m4s"))
+                    ]
+                    if not seg_lines:
+                        return
 
-                # Estrai segmenti dalla nuova finestra manifest
-                seg_lines = [
-                    line.strip()
-                    for line in manifest_text.splitlines()
-                    if line.strip()
-                    and not line.strip().startswith("#")
-                    and (line.strip().endswith(".ts") or line.strip().endswith(".m4s"))
-                ]
-                if not seg_lines:
-                    logger.debug("[ProactiveRefresh] Manifest senza segmenti media — skip")
-                    return
-
-                parsed_mf = _up_pmr.urlparse(manifest_url)
-                cdn_base = f"{parsed_mf.scheme}://{parsed_mf.netloc}"
-                mf_dir = cdn_base + parsed_mf.path.rsplit("/", 1)[0] + "/"
-                cdn_host = parsed_mf.netloc
-
-                # Aggiorna last_manifest_by_cdn con la nuova finestra
-                self.last_manifest_by_cdn[cdn_host] = (manifest_text, time.time(), manifest_url, manifest_headers)
-
-                # Prefetcha gli ultimi 2 segmenti (live edge)
-                new_segs = seg_lines[-2:]
-                for seg_rel in new_segs:
-                    if seg_rel.startswith("http://") or seg_rel.startswith("https://"):
-                        seg_abs = seg_rel
-                    elif seg_rel.startswith("/"):
-                        seg_abs = cdn_base + seg_rel
+                    # Risolvi ultimo segmento in path assoluto per confronto
+                    last_rel = seg_lines[-1]
+                    if last_rel.startswith("http://") or last_rel.startswith("https://"):
+                        last_abs_path = _up_pmr.urlparse(last_rel).path
+                    elif last_rel.startswith("/"):
+                        last_abs_path = last_rel
                     else:
-                        seg_abs = mf_dir + seg_rel
-                    if disable_ssl and "disable_ssl" not in seg_abs:
-                        seg_abs += ("&" if "?" in seg_abs else "?") + "disable_ssl=1"
+                        last_abs_path = _up_pmr.urlparse(mf_dir + last_rel).path
 
-                    spk = self._prefetch_cache_key(seg_abs)
-                    if (
-                        spk not in self.segment_prefetch_cache
-                        and spk not in self.segment_prefetch_in_flight
-                    ):
-                        asyncio.create_task(
-                            self._prefetch_next_segment(
-                                next_url=seg_abs,
-                                stream_headers=manifest_headers,
-                                session=session,
-                                disable_ssl=disable_ssl,
-                                bypass_warp=bypass_warp,
+                    # Se il CDN non ha ancora pubblicato un nuovo segmento, riprova
+                    if last_known_seg_path and last_abs_path == last_known_seg_path:
+                        if attempt < max_retries:
+                            logger.debug(
+                                f"[ProactiveRefresh] CDN non ha ancora nuovo segmento "
+                                f"(attempt {attempt+1}/{max_retries}) — retry in {retry_delay}s"
                             )
-                        )
-                        logger.info(
-                            f"🚀 [ProactiveRefresh] Prefetch nuovo segmento live: ...{seg_abs[-60:]}"
-                        )
-                    else:
-                        logger.debug(
-                            f"[ProactiveRefresh] Segmento già in cache/in-flight: ...{seg_abs[-60:]}"
-                        )
+                            await asyncio.sleep(retry_delay)
+                            continue
+                        else:
+                            logger.debug("[ProactiveRefresh] Max retry raggiunti — abbandono")
+                            return
 
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            logger.debug(f"[ProactiveRefresh] Errore (non critico): {type(exc).__name__}: {exc}")
+                    # Nuovo segmento disponibile! Aggiorna manifest e avvia prefetch
+                    self.last_manifest_by_cdn[cdn_host] = (
+                        manifest_text, time.time(), manifest_url, manifest_headers
+                    )
+                    for seg_rel in seg_lines[-2:]:
+                        if seg_rel.startswith("http://") or seg_rel.startswith("https://"):
+                            seg_abs = seg_rel
+                        elif seg_rel.startswith("/"):
+                            seg_abs = cdn_base + seg_rel
+                        else:
+                            seg_abs = mf_dir + seg_rel
+                        if disable_ssl and "disable_ssl" not in seg_abs:
+                            seg_abs += ("&" if "?" in seg_abs else "?") + "disable_ssl=1"
+                        spk = self._prefetch_cache_key(seg_abs)
+                        if spk not in self.segment_prefetch_cache and spk not in self.segment_prefetch_in_flight:
+                            asyncio.create_task(
+                                self._prefetch_next_segment(
+                                    next_url=seg_abs,
+                                    stream_headers=manifest_headers,
+                                    session=session,
+                                    disable_ssl=disable_ssl,
+                                    bypass_warp=bypass_warp,
+                                )
+                            )
+                            logger.info(f"🚀 [ProactiveRefresh] Prefetch nuovo segmento live: ...{seg_abs[-60:]}")
+                    return  # Fatto, non servono altri retry
+
+                except asyncio.CancelledError:
+                    return
+                except Exception as exc:
+                    logger.debug(f"[ProactiveRefresh] Errore attempt {attempt}: {type(exc).__name__}: {exc}")
+                    return
+
+        finally:
+            self._proactive_refresh_active.discard(cdn_host)
 
     async def shorten_hls_url(self, url: str) -> str:
         """Crea un ID breve per un URL e lo memorizza nella mappa."""
@@ -3737,10 +3756,10 @@ class HLSProxy:
                                             )
                                         )
                                 elif _manifest_url and _next_url is None:
-                                    # ✅ FIX FREEZE: siamo all'ultimo segmento del manifest.
-                                    # Il CDN pubblicherà il prossimo ~10s dopo l'inizio del segmento.
-                                    # Invece di aspettare che il client ripolli (altri 10s di freeze),
-                                    # ri-fetchiamo il manifest CDN dopo 4s e avviamo il prefetch.
+                                    # ✅ FIX FREEZE: siamo all'ultimo segmento (o non trovato nel manifest).
+                                    # ProactiveRefresh con retry: ripolla il manifest CDN ogni 2s
+                                    # finché il CDN non pubblica il segmento successivo.
+                                    _current_seg_path = _up_pf.urlparse(stream_url).path
                                     asyncio.create_task(
                                         self._proactive_manifest_refresh(
                                             manifest_url=_manifest_url,
@@ -3749,10 +3768,11 @@ class HLSProxy:
                                             disable_ssl=disable_ssl,
                                             bypass_warp=bypass_warp,
                                             delay=4.0,
+                                            last_known_seg_path=_current_seg_path,
                                         )
                                     )
                                     logger.debug(
-                                        f"[Prefetch] Ultimo segmento manifest — manifest refresh proattivo schedulato per ...{_manifest_url[-60:]}"
+                                        f"[Prefetch] ProactiveRefresh schedulato (ultimo seg: {_current_seg_path[-40:]})"
                                     )
                         self._cleanup_prefetch_cache()
                     except Exception as _pf_ex:
