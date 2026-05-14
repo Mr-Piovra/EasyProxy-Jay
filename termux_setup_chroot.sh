@@ -174,6 +174,8 @@ step "Phase 5/9: Configurazione Android Paranoid Network (GID 3003)"
 
 # Usa il target risolto (realpath) per tutte le operazioni chroot successive
 su -c "chroot '$CHROOT_TARGET' /bin/bash -c '
+    export PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"
+    
     # Aggiunge gruppo inet_android (GID 3003) se non esiste
     if ! grep -q \"^inet_android:\" /etc/group 2>/dev/null; then
         echo \"inet_android:x:3003:root\" >> /etc/group
@@ -206,46 +208,42 @@ info "(Il DNS viene aggiornato automaticamente ad ogni avvio di easyproxy)"
 # ─── PHASE 7: Patch FlareSolverr per CHRoot ─────────────────
 step "Phase 7/9: Patch FlareSolverr per ambiente CHRoot"
 
-FLARE_UTILS="${CHROOT_TARGET}/root/EasyProxy/flaresolverr/src/utils.py"
-if [ -f "$FLARE_UTILS" ]; then
-    # In un CHRoot Android, Chromium necessita di flag specifici:
-    #   --no-sandbox          : già impostato dal termux_setup.sh
-    #   --disable-dev-shm-usage : MANTENIAMO — anche con /dev/shm montato, in CHRoot
-    #                             il kernel può bloccare operazioni SHM avanzate
-    #   --no-zygote           : CRITICO — il processo Zygote usa clone()+namespace
-    #                             che sono bloccati in CHRoot. Senza questo flag,
-    #                             Chromium crasha silenziosamente all'avvio.
-    #   --disable-setuid-sandbox : belt-and-suspenders con --no-sandbox
-    #   --disable-gpu         : già impostato
-    #   --headless=new        : già impostato
-
-    # Aggiunge --no-zygote e --disable-setuid-sandbox dopo --no-sandbox se non presenti
-    if ! su -c "grep -q 'no-zygote' '$FLARE_UTILS'" 2>/dev/null; then
-        su -c "sed -i \"s|options.add_argument('--no-sandbox')|options.add_argument('--no-sandbox'); options.add_argument('--no-zygote'); options.add_argument('--disable-setuid-sandbox'); options.add_argument('--disable-extensions')|\" '$FLARE_UTILS'" 2>/dev/null || \
-            warn "Patch --no-zygote fallita — aggiungila manualmente a utils.py"
-        log "FlareSolverr: aggiunti --no-zygote, --disable-setuid-sandbox, --disable-extensions."
+su -c "chroot '$CHROOT_TARGET' /bin/bash -c '
+    export PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"
+    FLARE_UTILS=\"/root/EasyProxy/flaresolverr/src/utils.py\"
+    
+    if [ ! -f \"\$FLARE_UTILS\" ]; then
+        echo \"[WARN] flaresolverr/src/utils.py non trovato. Assicurati che FlareSolverr sia installato.\"
+        exit 0
+    fi
+    
+    # Aggiunge --no-zygote e --disable-setuid-sandbox
+    if ! grep -q \"no-zygote\" \"\$FLARE_UTILS\"; then
+        # Usa le quote singole esterne corrette o match senza apostrofi, qui stiamo modificando options.add_argument
+        sed -i \"s|options.add_argument(.--no-sandbox.)|options.add_argument('\''--no-sandbox'\''); options.add_argument('\''--no-zygote'\''); options.add_argument('\''--disable-setuid-sandbox'\''); options.add_argument('\''--disable-extensions'\'')|\" \"\$FLARE_UTILS\"
+        echo \"[OK] FlareSolverr: aggiunti --no-zygote, --disable-setuid-sandbox, --disable-extensions.\"
     else
-        log "FlareSolverr: --no-zygote già presente."
+        echo \"[OK] FlareSolverr: --no-zygote già presente.\"
     fi
 
-    # Assicura che --disable-dev-shm-usage sia presente (lo manteniamo in CHRoot)
-    if ! su -c "grep -q 'disable-dev-shm-usage' '$FLARE_UTILS'" 2>/dev/null; then
-        su -c "sed -i \"s|options.add_argument('--no-sandbox')|options.add_argument('--no-sandbox'); options.add_argument('--disable-dev-shm-usage')|\" '$FLARE_UTILS'" 2>/dev/null || true
-        log "FlareSolverr: --disable-dev-shm-usage aggiunto."
-    else
-        log "FlareSolverr: --disable-dev-shm-usage già presente (mantenuto)."
+    # Assicura --disable-dev-shm-usage
+    if ! grep -q \"disable-dev-shm-usage\" \"\$FLARE_UTILS\"; then
+        sed -i \"s|options.add_argument(.--no-sandbox.)|options.add_argument('\''--no-sandbox'\''); options.add_argument('\''--disable-dev-shm-usage'\'')|\" \"\$FLARE_UTILS\"
+        echo \"[OK] FlareSolverr: --disable-dev-shm-usage aggiunto.\"
     fi
-
-    # Verifica --no-sandbox obbligatorio
-    if ! su -c "grep -q 'no-sandbox' '$FLARE_UTILS'" 2>/dev/null; then
-        warn "--no-sandbox non trovato in utils.py — potrebbe causare crash di Chromium."
+    
+    # Patch per start_xvfb_display() -> pass
+    if grep -q \"start_xvfb_display()\" \"\$FLARE_UTILS\"; then
+        sed -i \"s|^[[:space:]]*start_xvfb_display()|    pass|g\" \"\$FLARE_UTILS\"
+        echo \"[OK] FlareSolverr: Xvfb rimosso (start_xvfb_display -> pass).\"
     fi
-
-    info "Flag Chromium attivi in utils.py:"
-    su -c "grep \"add_argument\" '$FLARE_UTILS' | grep -E 'sandbox|shm|zygote|gpu|headless'" 2>/dev/null || true
-else
-    warn "flaresolverr/src/utils.py non trovato. Verrà configurato al primo avvio."
-fi
+    
+    # Patch per chromedriver path
+    sed -i \"s|driver_executable_path=driver_exe_path|driver_executable_path=\\\"/usr/bin/chromedriver\\\"|\" \"\$FLARE_UTILS\"
+    
+    echo \"[INFO] Flag Chromium attivi in utils.py:\"
+    grep \"add_argument\" \"\$FLARE_UTILS\" | grep -E \"sandbox|shm|zygote|gpu|headless\" || true
+'"
 
 # ─── PHASE 8: Script di avvio interno al CHRoot ─────────────
 step "Phase 8/9: Creazione easyproxy_chroot_start.sh"
