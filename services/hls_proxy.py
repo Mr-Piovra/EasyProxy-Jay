@@ -3581,9 +3581,12 @@ class HLSProxy:
                 # =========================================================
                 # TS SEGMENT PREFETCH & COALESCING (DVR + LIVE Fix)
                 # =========================================================
+                import urllib.parse as _up_ts
+                _req_path = _up_ts.urlparse(request.path).path
+                _str_path = _up_ts.urlparse(stream_url).path
                 _is_ts_segment = (
-                    request.path.endswith(".ts") or stream_url.endswith(".ts")
-                    or request.path.endswith(".m4s") or stream_url.endswith(".m4s")
+                    _req_path.endswith(".ts") or _str_path.endswith(".ts")
+                    or _req_path.endswith(".m4s") or _str_path.endswith(".m4s")
                 )
                 
                 def trigger_next_prefetch():
@@ -4203,16 +4206,19 @@ class HLSProxy:
                         response_headers[header] = resp.headers[header]
 
                 # ✅ FIX: Forza Content-Type coerente se il server non lo invia correttamente
+                import urllib.parse as _up_mime
+                _s_path = _up_mime.urlparse(stream_url).path
+                _r_path = _up_mime.urlparse(request.path).path
                 if (
-                    stream_url.endswith(".ts") or request.path.endswith(".ts")
+                    _s_path.endswith(".ts") or _r_path.endswith(".ts")
                 ) and "video/mp2t" not in response_headers.get(
                     "content-type", ""
                 ).lower():
                     set_response_header(response_headers, "Content-Type", "video/MP2T")
                 elif (
-                    stream_url.endswith(".vtt")
-                    or stream_url.endswith(".webvtt")
-                    or request.path.endswith(".vtt")
+                    _s_path.endswith(".vtt")
+                    or _s_path.endswith(".webvtt")
+                    or _r_path.endswith(".vtt")
                 ) and "text/vtt" not in response_headers.get(
                     "content-type", ""
                 ).lower():
