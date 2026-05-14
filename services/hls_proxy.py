@@ -550,8 +550,13 @@ class HLSProxy:
 
                 body = await resp.read()
                 # Strip fake PNG header se necessario
-                if next_url.endswith('.ts'):
+                import urllib.parse as _up_pf_ext
+                _pf_path = _up_pf_ext.urlparse(next_url).path
+                if _pf_path.endswith('.ts'):
+                    original_len = len(body)
                     body = self._strip_fake_png_header_from_ts(body)
+                    if len(body) != original_len:
+                        logger.debug(f"✂️ [Prefetch] Finto header PNG rimosso ({original_len - len(body)} bytes) da ...{next_url[-40:]}")
 
                 upstream_headers = dict(resp.headers)
                 expires_at = time.time() + self.segment_prefetch_ttl
@@ -3632,8 +3637,10 @@ class HLSProxy:
                                 self.segment_prefetch_in_flight[_pk].wait(), timeout=15.0
                             )
                             _cached_seg = self.segment_prefetch_cache.get(_pk)
+                            if not _cached_seg:
+                                logger.debug(f"⚠️ [Prefetch Wait] Attesa terminata, ma segmento non in cache (Fallito?). Fallback a fetch standard: ...{stream_url[-40:]}")
                         except asyncio.TimeoutError:
-                            logger.warning(f"⚠️ [Prefetch Wait] Timeout attesa prefetch: ...{stream_url[-60:]}")
+                            logger.warning(f"⚠️ [Prefetch Wait] Timeout attesa prefetch: ...{stream_url[-40:]}")
 
                     if _cached_seg:
                         _body_cached, _hdrs_cached, _exp_cached = _cached_seg
@@ -3667,7 +3674,7 @@ class HLSProxy:
                             if _seg_coalesce_key in self.in_flight_segment_data:
                                 _c_result = self.in_flight_segment_data[_seg_coalesce_key]
                                 if isinstance(_c_result, Exception):
-                                    logger.warning(f"⚠️ [Coalesce] Errore propagato per: ...{stream_url[-60:]}")
+                                    logger.warning(f"⚠️ [Coalesce] Errore propagato per: ...{stream_url[-40:]}")
                                     _seg_coalesce_key = None # Fallback a fetch indipendente
                                 else:
                                     _c_bytes, _c_status, _c_headers = _c_result
@@ -3683,7 +3690,7 @@ class HLSProxy:
                                             headers=_c_headers,
                                         )
                         except asyncio.TimeoutError:
-                            logger.warning(f"⚠️ [Coalesce] Timeout attesa segmento, fetch indipendente: ...{stream_url[-60:]}")
+                            logger.warning(f"⚠️ [Coalesce] Timeout attesa segmento, fetch indipendente: ...{stream_url[-40:]}")
                             _seg_coalesce_key = None
                     
                     if _seg_coalesce_key:
@@ -4191,6 +4198,8 @@ class HLSProxy:
                     original_len = len(content_bytes)
                     content_bytes = self._strip_fake_png_header_from_ts(content_bytes)
                     segment_was_stripped = len(content_bytes) != original_len
+                    if segment_was_stripped:
+                        logger.debug(f"✂️ [Proxy Stream] Finto header PNG rimosso ({original_len - len(content_bytes)} bytes) da ...{stream_url[-40:]}")
 
                 response_headers = {}
 
