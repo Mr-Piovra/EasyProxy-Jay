@@ -218,7 +218,21 @@ su -c "chroot '$CHROOT_TARGET' /bin/bash -c '
     fi
     
     # Ripristina utils.py allo stato originale per renderlo idempotente e rimediare a patch errate
+    git config --global --add safe.directory '*' 2>/dev/null || true
     cd /root/EasyProxy/flaresolverr && git checkout -- src/utils.py 2>/dev/null || true
+    
+    # Fallback: se git checkout fallisce, ripariamo manualmente il file corrotto dal vecchio script
+    python3 -c \"
+import sys
+try:
+    f = sys.argv[1]
+    with open(f, 'r') as file: data = file.read()
+    if 'else:\n    pass' in data:
+        data = data.replace('else:\n    pass', 'else:\n        pass')
+        with open(f, 'w') as file: file.write(data)
+except Exception as e:
+    pass
+\" \"\$FLARE_UTILS\"
     
     # Aggiunge --no-zygote e --disable-setuid-sandbox
     if ! grep -q \"no-zygote\" \"\$FLARE_UTILS\"; then
