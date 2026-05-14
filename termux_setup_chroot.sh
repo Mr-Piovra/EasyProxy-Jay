@@ -528,6 +528,7 @@ su -c "chroot '\${ROOTFS}' /bin/bash -c '
     command -v git >/dev/null 2>&1 || apt-get install -y git --quiet 2>&1
 
     cd /root/EasyProxy &&
+    git config --global --add safe.directory /root/EasyProxy &&
     git fetch --quiet &&
     git reset --hard origin/main &&
     pip install -r requirements.txt --upgrade --break-system-packages --quiet &&
