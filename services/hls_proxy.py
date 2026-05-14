@@ -432,7 +432,7 @@ class HLSProxy:
         self.segment_prefetch_cache: dict = {}
         self.segment_prefetch_ttl: int = 60   # secondi
         # Set degli URL attualmente in prefetch (evita doppi download paralleli)
-        self.segment_prefetch_in_flight: set = set()
+        self.segment_prefetch_in_flight: dict = {}
         # Ultimo manifest raw visto per ciascun base-URL CDN (per estrarre next segment)
         # Struttura: cdn_base -> (manifest_text, fetch_time)
         self.last_manifest_by_cdn: dict = {}
@@ -520,14 +520,15 @@ class HLSProxy:
 
         # Evita doppio prefetch dello stesso segmento
         if cache_key in self.segment_prefetch_in_flight:
-            logger.debug(f"[Prefetch] Già in corso per {next_url[-60:]}")
+            logger.debug(f"[Prefetch] Già in corso per ...{next_url[-60:]}")
             return
         # Evita di ri-prefetchare qualcosa già in cache
         if cache_key in self.segment_prefetch_cache:
-            logger.debug(f"[Prefetch] Già in cache per {next_url[-60:]}")
+            logger.debug(f"[Prefetch] Già in cache per ...{next_url[-60:]}")
             return
 
-        self.segment_prefetch_in_flight.add(cache_key)
+        pf_event = asyncio.Event()
+        self.segment_prefetch_in_flight[cache_key] = pf_event
         t_start = time.monotonic()
         logger.info(f"🔄 [Prefetch] Avvio download anticipato: ...{next_url[-80:]}")
 
@@ -571,7 +572,9 @@ class HLSProxy:
                 f"{type(e).__name__}: {e}"
             )
         finally:
-            self.segment_prefetch_in_flight.discard(cache_key)
+            evt = self.segment_prefetch_in_flight.pop(cache_key, None)
+            if evt:
+                evt.set()
 
     def _cleanup_prefetch_cache(self) -> None:
         """Rimuove entry scadute dalla prefetch cache (chiamata lazy)."""
@@ -3617,6 +3620,18 @@ class HLSProxy:
                     # 1. Check Prefetch Cache
                     _pk = self._prefetch_cache_key(stream_url)
                     _cached_seg = self.segment_prefetch_cache.get(_pk)
+                    
+                    # Se non è in cache ma è in corso di prefetch, aspettiamo!
+                    if not _cached_seg and _pk in self.segment_prefetch_in_flight:
+                        logger.debug(f"⏳ [Prefetch Wait] Aspettando download anticipato in corso: ...{stream_url[-60:]}")
+                        try:
+                            await asyncio.wait_for(
+                                self.segment_prefetch_in_flight[_pk].wait(), timeout=15.0
+                            )
+                            _cached_seg = self.segment_prefetch_cache.get(_pk)
+                        except asyncio.TimeoutError:
+                            logger.warning(f"⚠️ [Prefetch Wait] Timeout attesa prefetch: ...{stream_url[-60:]}")
+
                     if _cached_seg:
                         _body_cached, _hdrs_cached, _exp_cached = _cached_seg
                         if time.time() < _exp_cached:
@@ -3638,7 +3653,8 @@ class HLSProxy:
                             self.segment_prefetch_cache.pop(_pk, None)
                     
                     # 2. Check In-Flight Coalescing (DVR + Live deduplication)
-                    _seg_coalesce_key = f"seg:{stream_url}"
+                    # Usa _pk come chiave così unifica anche se hanno disable_ssl=1 diverso!
+                    _seg_coalesce_key = f"seg:{_pk}"
                     if _seg_coalesce_key in self.in_flight_segments:
                         logger.debug(f"⏳ [Coalesce] Aspettando download segmento in corso: ...{stream_url[-60:]}")
                         try:
