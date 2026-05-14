@@ -436,7 +436,7 @@ class HLSProxy:
         # Ultimo manifest raw visto per ciascun base-URL CDN (per estrarre next segment)
         # Struttura: cdn_base -> (manifest_text, fetch_time)
         self.last_manifest_by_cdn: dict = {}
-        # Set dei CDN host per cui è già attivo un ProactiveRefresh (dedup)
+        # Set dei last_known_seg_path per cui è già attivo un ProactiveRefresh (dedup per segmento)
         self._proactive_refresh_active: set = set()
 
     # ---------------------------------------------------------------------------
@@ -631,11 +631,13 @@ class HLSProxy:
         cdn_base = f"{parsed_mf.scheme}://{cdn_host}"
         mf_dir = cdn_base + parsed_mf.path.rsplit("/", 1)[0] + "/"
 
-        # Dedup: un solo ProactiveRefresh attivo per CDN host
-        if cdn_host in self._proactive_refresh_active:
-            logger.debug(f"[ProactiveRefresh] Già attivo per {cdn_host} — skip")
+        # Dedup per SEGMENTO (non per CDN host): due task per lo stesso segmento
+        # sono ridondanti, ma DVR e client live su segmenti diversi devono girare in parallelo.
+        dedup_key = last_known_seg_path or manifest_url
+        if dedup_key in self._proactive_refresh_active:
+            logger.debug(f"[ProactiveRefresh] Già attivo per {dedup_key[-40:]} — skip")
             return
-        self._proactive_refresh_active.add(cdn_host)
+        self._proactive_refresh_active.add(dedup_key)
 
         try:
             await asyncio.sleep(delay)
@@ -723,7 +725,7 @@ class HLSProxy:
                     return
 
         finally:
-            self._proactive_refresh_active.discard(cdn_host)
+            self._proactive_refresh_active.discard(dedup_key)
 
     async def shorten_hls_url(self, url: str) -> str:
         """Crea un ID breve per un URL e lo memorizza nella mappa."""
