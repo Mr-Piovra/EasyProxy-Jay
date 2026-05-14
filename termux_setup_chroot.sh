@@ -222,17 +222,9 @@ su -c "chroot '$CHROOT_TARGET' /bin/bash -c '
     cd /root/EasyProxy/flaresolverr && git checkout -- src/utils.py 2>/dev/null || true
     
     # Fallback: se git checkout fallisce, ripariamo manualmente il file corrotto dal vecchio script
-    python3 -c \"
-import sys
-try:
-    f = sys.argv[1]
-    with open(f, 'r') as file: data = file.read()
-    if 'else:\n    pass' in data:
-        data = data.replace('else:\n    pass', 'else:\n        pass')
-        with open(f, 'w') as file: file.write(data)
-except Exception as e:
-    pass
-\" \"\$FLARE_UTILS\"
+    echo "aW1wb3J0IHN5cwp0cnk6CiAgICBmID0gc3lzLmFyZ3ZbMV0KICAgIHdpdGggb3BlbihmLCAncicpIGFzIGZpbGU6IGRhdGEgPSBmaWxlLnJlYWQoKQogICAgaWYgJ2Vsc2U6XG4gICAgcGFzcycgaW4gZGF0YToKICAgICAgICBkYXRhID0gZGF0YS5yZXBsYWNlKCdlbHNlOlxuICAgIHBhc3MnLCAnZWxzZTpcbiAgICAgICAgcGFzcycpCiAgICAgICAgd2l0aCBvcGVuKGYsICd3JykgYXMgZmlsZTogZmlsZS53cml0ZShkYXRhKQpleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICBwYXNzCg==" | base64 -d > /tmp/fix_utils.py
+    python3 /tmp/fix_utils.py "\$FLARE_UTILS"
+    rm -f /tmp/fix_utils.py
     
     # Aggiunge --no-zygote e --disable-setuid-sandbox
     if ! grep -q \"no-zygote\" \"\$FLARE_UTILS\"; then
