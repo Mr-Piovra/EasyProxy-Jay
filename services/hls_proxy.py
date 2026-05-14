@@ -3408,7 +3408,7 @@ class HLSProxy:
                 session = await self._get_session(url=stream_url)
                 session_proxy = None
                 logger.info(
-                    f"[Proxy Stream] Using direct session (forced) for: {stream_url}"
+                    f"[Proxy Stream] Using direct session (forced) for: ...{stream_url[-60:]}"
                 )
             else:
                 session, session_proxy = await self._get_proxy_session(
@@ -3424,7 +3424,7 @@ class HLSProxy:
                     routing = "BYPASS (Real IP)"
                 
                 logger.info(
-                    f"📡 [Proxy Stream] {routing} - Using session (direct) for: {stream_url}"
+                    f"📡 [Proxy Stream] {routing} - Using session (direct) for: ...{stream_url[-60:]}"
                 )
 
             # --- PROTECTED DOMAINS FALLBACK: curl_cffi ---
@@ -3437,7 +3437,7 @@ class HLSProxy:
                     use_curl_cffi = False
 
             if use_curl_cffi:
-                logger.info(f"🚀 [curl_cffi] Using browser impersonation for: {stream_url}")
+                logger.info(f"🚀 [curl_cffi] Using browser impersonation for: ...{stream_url[-60:]}")
                 try:
                     # Use a pooled curl session if available
                     session_key = f"curl_{session_proxy or 'direct'}"
@@ -3583,6 +3583,34 @@ class HLSProxy:
                     or request.path.endswith(".m4s") or stream_url.endswith(".m4s")
                 )
                 
+                def trigger_next_prefetch():
+                    try:
+                        import urllib.parse as _up_pf
+                        _cdn_host = _up_pf.urlparse(stream_url).netloc
+                        _manifest_entry = self.last_manifest_by_cdn.get(_cdn_host)
+                        if _manifest_entry:
+                            _manifest_text, _mf_time = _manifest_entry
+                            if time.time() - _mf_time < 30:
+                                _next_url = self._get_next_segment_url(_manifest_text, stream_url)
+                                if _next_url and _next_url != stream_url:
+                                    _nk = self._prefetch_cache_key(_next_url)
+                                    if (
+                                        _nk not in self.segment_prefetch_cache
+                                        and _nk not in self.segment_prefetch_in_flight
+                                    ):
+                                        asyncio.create_task(
+                                            self._prefetch_next_segment(
+                                                next_url=_next_url,
+                                                stream_headers=headers,
+                                                session=session,
+                                                disable_ssl=disable_ssl,
+                                                bypass_warp=bypass_warp,
+                                            )
+                                        )
+                        self._cleanup_prefetch_cache()
+                    except Exception as _pf_ex:
+                        logger.debug(f"[Prefetch] Errore nella pianificazione: {_pf_ex}")
+
                 _seg_coalesce_key = None
                 
                 if _is_ts_segment and not is_cccdn_stream:
@@ -3592,11 +3620,14 @@ class HLSProxy:
                     if _cached_seg:
                         _body_cached, _hdrs_cached, _exp_cached = _cached_seg
                         if time.time() < _exp_cached:
-                            self.segment_prefetch_cache.pop(_pk, None)
+                            # ❌ FIX: DO NOT pop the cache! Other clients (DVR/Live) might need it!
                             logger.info(
                                 f"⚡ [Prefetch HIT] Segmento servito da cache ({len(_body_cached) // 1024}KB): "
                                 f"...{stream_url[-60:]}"
                             )
+                            # ✅ FIX: Trigger prefetch for next segment before returning early!
+                            trigger_next_prefetch()
+                            
                             # Return immediately without opening upstream connection
                             return web.Response(
                                 body=_body_cached,
@@ -3623,6 +3654,10 @@ class HLSProxy:
                                     _c_bytes, _c_status, _c_headers = _c_result
                                     if _c_status in [200, 206]:
                                         logger.info(f"✅ [Coalesce] Segmento servito dalla memoria: ...{stream_url[-60:]}")
+                                        
+                                        # ✅ FIX: Trigger prefetch even if we were coalesced!
+                                        trigger_next_prefetch()
+                                        
                                         return web.Response(
                                             body=_c_bytes,
                                             status=_c_status,
@@ -3729,7 +3764,7 @@ class HLSProxy:
                             )
                     error_body = await resp.read()
                     routing = "WARP" if (session_proxy and WARP_PROXY_URL and session_proxy == WARP_PROXY_URL) else ("BYPASS" if session_proxy is None else "PROXY")
-                    logger.warning(f"⚠️ Upstream returned error {resp.status} for {stream_url} [Routing: {routing}]")
+                    logger.warning(f"⚠️ Upstream returned error {resp.status} for ...{stream_url[-60:]} [Routing: {routing}]")
                     # ✅ FIX DVR+Live: Notify manifest coalesce waiters on upstream error.
                     # Mark as failed so waiters fall back to independent fetch immediately.
                     try:
@@ -3822,7 +3857,7 @@ class HLSProxy:
                         pass
 
                 if manifest_content:
-                    logger.info(f"📄 HLS manifest detected: {stream_url}")
+                    logger.info(f"📄 HLS manifest detected: ...{stream_url[-60:]}")
                     # ✅ OPT: Salva il manifest raw nella mappa CDN e avvia prefetch anticipato.
                     # Opera solo su media playlist (contengono righe .ts/.m4s).
                     # STRATEGIA: partire dal manifest (non dal segmento) garantisce 9-10s di vantaggio
@@ -4221,61 +4256,14 @@ class HLSProxy:
                 # Lo facciamo DOPO aver costruito la risposta (non await) per non
                 # aggiungere latenza al client. Opera solo su segmenti .ts o .m4s.
                 if _is_ts_segment:
-                    try:
-                        # Recupera il manifest più recente visto per questo CDN
-                        import urllib.parse as _up_pf
-                        _cdn_host = _up_pf.urlparse(stream_url).netloc
-                        _manifest_entry = self.last_manifest_by_cdn.get(_cdn_host)
-                        if _manifest_entry:
-                            _manifest_text, _mf_time = _manifest_entry
-                            # Usa solo se il manifest è fresco (< 30s)
-                            if time.time() - _mf_time < 30:
-                                _next_url = self._get_next_segment_url(_manifest_text, stream_url)
-                                if _next_url and _next_url != stream_url:
-                                    _nk = self._prefetch_cache_key(_next_url)
-                                    if (
-                                        _nk not in self.segment_prefetch_cache
-                                        and _nk not in self.segment_prefetch_in_flight
-                                    ):
-                                        asyncio.create_task(
-                                            self._prefetch_next_segment(
-                                                next_url=_next_url,
-                                                stream_headers=headers,
-                                                session=session,
-                                                disable_ssl=disable_ssl,
-                                                bypass_warp=bypass_warp,
-                                            )
-                                        )
-                                    else:
-                                        logger.debug(
-                                            f"[Prefetch] Segmento già in cache/in-flight, skip: "
-                                            f"...{_next_url[-60:]}"
-                                        )
-                                else:
-                                    logger.debug(
-                                        "[Prefetch] Nessun segmento successivo identificato nel manifest"
-                                    )
-                            else:
-                                logger.debug(
-                                    f"[Prefetch] Manifest per {_cdn_host} troppo vecchio "
-                                    f"({int(time.time() - _mf_time)}s), skip prefetch"
-                                )
-                        else:
-                            logger.debug(
-                                f"[Prefetch] Nessun manifest in memoria per {_cdn_host}, "
-                                "skip prefetch (primo segmento della sessione)"
-                            )
-                        # Pulizia lazy della cache prefetch
-                        self._cleanup_prefetch_cache()
-                    except Exception as _pf_ex:
-                        logger.debug(f"[Prefetch] Errore nella pianificazione: {_pf_ex}")
+                    trigger_next_prefetch()
 
                 return final_response
 
 
         except (ClientPayloadError, ConnectionResetError, OSError) as e:
             # Errori tipici di disconnessione del client
-            logger.info(f"ℹ️ Client disconnected from stream: {stream_url} ({str(e)})")
+            logger.info(f"ℹ️ Client disconnected from stream: ...{stream_url[-60:]} ({str(e)})")
             return web.Response(text="Client disconnected", status=499)
 
         except (
@@ -4284,13 +4272,13 @@ class HLSProxy:
             asyncio.TimeoutError,
         ) as e:
             # Errori di connessione upstream
-            logger.warning(f"⚠️ Connection lost with source: {stream_url} ({str(e)})")
+            logger.warning(f"⚠️ Connection lost with source: ...{stream_url[-60:]} ({str(e)})")
             return web.Response(text=f"Upstream connection lost: {str(e)}", status=502)
 
         except Exception as e:
             err_msg = str(e)
             if "Connection lost" in err_msg or "Connection reset" in err_msg:
-                logger.info(f"ℹ️ Stream connection closed by client or server: {stream_url}")
+                logger.info(f"ℹ️ Stream connection closed by client or server: ...{stream_url[-60:]}")
                 return web.Response(text="Connection lost", status=499)
             
             logger.error(
