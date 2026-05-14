@@ -217,6 +217,9 @@ su -c "chroot '$CHROOT_TARGET' /bin/bash -c '
         exit 0
     fi
     
+    # Ripristina utils.py allo stato originale per renderlo idempotente e rimediare a patch errate
+    cd /root/EasyProxy/flaresolverr && git checkout -- src/utils.py 2>/dev/null || true
+    
     # Aggiunge --no-zygote e --disable-setuid-sandbox
     if ! grep -q \"no-zygote\" \"\$FLARE_UTILS\"; then
         # Usa le quote singole esterne corrette o match senza apostrofi, qui stiamo modificando options.add_argument
@@ -232,11 +235,9 @@ su -c "chroot '$CHROOT_TARGET' /bin/bash -c '
         echo \"[OK] FlareSolverr: --disable-dev-shm-usage aggiunto.\"
     fi
     
-    # Patch per start_xvfb_display() -> pass
-    if grep -q \"start_xvfb_display()\" \"\$FLARE_UTILS\"; then
-        sed -i \"s|^[[:space:]]*start_xvfb_display()|    pass|g\" \"\$FLARE_UTILS\"
-        echo \"[OK] FlareSolverr: Xvfb rimosso (start_xvfb_display -> pass).\"
-    fi
+    # Patch per start_xvfb_display() -> pass, preservando indentazione
+    sed -i \"s|^\([[:space:]]*\)start_xvfb_display()|\1pass|g\" \"\$FLARE_UTILS\"
+    echo \"[OK] FlareSolverr: Xvfb rimosso (start_xvfb_display -> pass).\"
     
     # Patch per chromedriver path
     sed -i \"s|driver_executable_path=driver_exe_path|driver_executable_path=\\\"/usr/bin/chromedriver\\\"|\" \"\$FLARE_UTILS\"
