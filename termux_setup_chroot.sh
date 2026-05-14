@@ -503,7 +503,7 @@ if [ ! -f "\$LOG_FILE" ]; then
     exit 0
 fi
 
-su -c "tail -n 120 -f '\$LOG_FILE'"
+su -c "tail -n 120 -f '\$LOG_FILE'" | cat
 LOGS_EOF
 chmod +x "$PREFIX/bin/easyproxy-logs"
 log "Creato: easyproxy-logs"
