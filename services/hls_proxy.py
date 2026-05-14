@@ -372,6 +372,15 @@ class HLSProxy:
         self.in_flight_segments: dict = {}
         self.in_flight_segment_data: dict = {}
 
+        # ✅ FIX DVR+Live: Per-target_url lock for extractor force_refresh.
+        # When DVR (FFmpeg polling) and live player both receive a 502 for the same
+        # channel at the same time, both handlers reach the "Forcing extractor refresh"
+        # block concurrently. Without a lock they both call extractor.extract() in
+        # parallel, producing N simultaneous auth calls to lokke.app → CDN 502 storm.
+        # With this lock only the first request does the refresh; the others wait, then
+        # the extractor's own _url_cache serves them instantly.
+        self._extractor_refresh_locks: dict = {}  # target_url -> asyncio.Lock
+
         # Sessione condivisa per il proxy (no proxy)
         self.session = None
         self.flex_session = None
@@ -380,6 +389,14 @@ class HLSProxy:
         # Distinta da captured_hls_manifest_map (quella è per manifesti catturati dagli estrattori)
         # Questa opera su manifesti raw fetchati in _proxy_stream
         self.manifest_cache = {}   # cache_key -> (rewritten_text, expires_at)
+
+        # ✅ FIX DVR+Live: Manifest fetch coalescing.
+        # When DVR (FFmpeg) and live player poll the same channel manifest simultaneously,
+        # only ONE upstream request is made; the second consumer waits on the asyncio.Event
+        # and reads the result from _manifest_inflight_data — zero extra CDN hits.
+        # Structure mirrors the segment coalescing pattern (in_flight_segments).
+        self._manifest_inflight: dict = {}       # cdn_url_key -> asyncio.Event
+        self._manifest_inflight_data: dict = {}  # cdn_url_key -> (text, status) | Exception
 
         # ✅ OPT: Key cache — evita fetch upstream ripetuti della stessa chiave AES-128.
         # Le chiavi AES-128 sono 16 byte fissi che non cambiano durante una sessione di streaming.
@@ -2276,14 +2293,23 @@ class HLSProxy:
             if isinstance(proxy_response, web.Response) and proxy_response.status in [403, 404, 500, 502, 503, 504]:
                 if extractor and not force_refresh:
                     logger.warning(f"🔄 Upstream returned {proxy_response.status}. Forcing extractor refresh for {target_url[:80]}...")
-                    
-                    result = await extractor.extract(
-                        target_url,
-                        force_refresh=True,
-                        request_headers=combined_headers,
-                        bypass_warp=bypass_warp,
-                        proxy=request.query.get("proxy")
-                    )
+
+                    # ✅ FIX DVR+Live: Serialize concurrent refreshes for the same channel URL.
+                    # DVR (FFmpeg) and live player may both receive a 502 at the same moment.
+                    # Only one should perform the actual auth refresh; the others wait and
+                    # then benefit from the freshly cached token.
+                    if target_url not in self._extractor_refresh_locks:
+                        self._extractor_refresh_locks[target_url] = asyncio.Lock()
+                    _refresh_lock = self._extractor_refresh_locks[target_url]
+
+                    async with _refresh_lock:
+                        result = await extractor.extract(
+                            target_url,
+                            force_refresh=True,
+                            request_headers=combined_headers,
+                            bypass_warp=bypass_warp,
+                            proxy=request.query.get("proxy")
+                        )
                     bypass_warp = result.get("bypass_warp", bypass_warp)
                     stream_url = result["destination_url"]
                     stream_headers = result.get("request_headers", {})
@@ -3549,6 +3575,66 @@ class HLSProxy:
                 else:
                     request_target = yarl.URL(stream_url, encoded=True)
 
+                # =========================================================
+                # TS SEGMENT PREFETCH & COALESCING (DVR + LIVE Fix)
+                # =========================================================
+                _is_ts_segment = (
+                    request.path.endswith(".ts") or stream_url.endswith(".ts")
+                    or request.path.endswith(".m4s") or stream_url.endswith(".m4s")
+                )
+                
+                _seg_coalesce_key = None
+                
+                if _is_ts_segment and not is_cccdn_stream:
+                    # 1. Check Prefetch Cache
+                    _pk = self._prefetch_cache_key(stream_url)
+                    _cached_seg = self.segment_prefetch_cache.get(_pk)
+                    if _cached_seg:
+                        _body_cached, _hdrs_cached, _exp_cached = _cached_seg
+                        if time.time() < _exp_cached:
+                            self.segment_prefetch_cache.pop(_pk, None)
+                            logger.info(
+                                f"⚡ [Prefetch HIT] Segmento servito da cache ({len(_body_cached) // 1024}KB): "
+                                f"...{stream_url[-60:]}"
+                            )
+                            # Return immediately without opening upstream connection
+                            return web.Response(
+                                body=_body_cached,
+                                status=200,
+                                headers=_hdrs_cached,
+                            )
+                        else:
+                            self.segment_prefetch_cache.pop(_pk, None)
+                    
+                    # 2. Check In-Flight Coalescing (DVR + Live deduplication)
+                    _seg_coalesce_key = f"seg:{stream_url}"
+                    if _seg_coalesce_key in self.in_flight_segments:
+                        logger.debug(f"⏳ [Coalesce] Aspettando download segmento in corso: ...{stream_url[-60:]}")
+                        try:
+                            await asyncio.wait_for(
+                                self.in_flight_segments[_seg_coalesce_key].wait(), timeout=15.0
+                            )
+                            if _seg_coalesce_key in self.in_flight_segment_data:
+                                _c_result = self.in_flight_segment_data[_seg_coalesce_key]
+                                if isinstance(_c_result, Exception):
+                                    logger.warning(f"⚠️ [Coalesce] Errore propagato per: ...{stream_url[-60:]}")
+                                    _seg_coalesce_key = None # Fallback a fetch indipendente
+                                else:
+                                    _c_bytes, _c_status, _c_headers = _c_result
+                                    if _c_status in [200, 206]:
+                                        logger.info(f"✅ [Coalesce] Segmento servito dalla memoria: ...{stream_url[-60:]}")
+                                        return web.Response(
+                                            body=_c_bytes,
+                                            status=_c_status,
+                                            headers=_c_headers,
+                                        )
+                        except asyncio.TimeoutError:
+                            logger.warning(f"⚠️ [Coalesce] Timeout attesa segmento, fetch indipendente: ...{stream_url[-60:]}")
+                            _seg_coalesce_key = None
+                    
+                    if _seg_coalesce_key:
+                        self.in_flight_segments[_seg_coalesce_key] = asyncio.Event()
+
                 # ✅ OPT: Cache manifest in-memory con TTL 2s.
                 # I player HLS ri-richiedono il manifest ogni 1-3s: la cache evita fetch upstream ridondanti.
                 # Sicura: opera SOLO su stream non-cccdn e non-curl_cffi (percorso non già gestito).
@@ -3562,6 +3648,44 @@ class HLSProxy:
                         "Access-Control-Allow-Origin": "*",
                         "Cache-Control": "no-cache",
                     })
+
+                # ✅ FIX DVR+Live: Manifest fetch coalescing.
+                # DVR (FFmpeg) and live player both poll the manifest every ~2s.
+                # If both reach here at the same time for the same CDN URL, only one
+                # does the real upstream fetch; the other waits and reuses the result.
+                # This eliminates duplicate CDN hits and prevents 502 storms from
+                # the CDN interpreting parallel identical requests as abuse.
+                _mf_inflight_key = None
+                if not is_cccdn_stream:
+                    _mf_inflight_key = f"mf:{_manifest_cache_key}"
+
+                if _mf_inflight_key and _mf_inflight_key in self._manifest_inflight:
+                    # Another consumer is already fetching — wait for its result
+                    logger.debug(f"⏳ [ManifestCoalesce] Waiting for in-flight manifest: {_manifest_cache_key}")
+                    try:
+                        await asyncio.wait_for(
+                            self._manifest_inflight[_mf_inflight_key].wait(), timeout=10.0
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(f"⚠️ [ManifestCoalesce] Timeout waiting for manifest {_manifest_cache_key}, fetching independently")
+                        _mf_inflight_key = None  # fall through to independent fetch
+                    else:
+                        _mf_result = self._manifest_inflight_data.get(_mf_inflight_key)
+                        if isinstance(_mf_result, tuple):
+                            _mf_text, _mf_status = _mf_result
+                            logger.debug(f"✅ [ManifestCoalesce] Served from shared fetch: {_manifest_cache_key}")
+                            return web.Response(text=_mf_text, headers={
+                                "Content-Type": "application/vnd.apple.mpegurl",
+                                "Access-Control-Allow-Origin": "*",
+                                "Cache-Control": "no-cache",
+                            })
+                        else:
+                            # The primary fetch failed — fetch independently
+                            logger.debug(f"⚠️ [ManifestCoalesce] Primary fetch failed for {_manifest_cache_key}, retrying independently")
+                            _mf_inflight_key = None
+                elif _mf_inflight_key:
+                    # We are first — register the in-flight event
+                    self._manifest_inflight[_mf_inflight_key] = asyncio.Event()
 
                 # ✅ OPT: Retry una volta (0.5s) prima di aprire il context manager TCP.
                 # Il retry va fatto QUI, non dentro iter_any() che è un generator già aperto su TCP.
@@ -3579,6 +3703,7 @@ class HLSProxy:
                             raise
                 if resp_ctx is None:
                     resp_ctx = session.get(request_target, headers=headers, ssl=not disable_ssl)
+
 
             async with resp_ctx as resp:
                 content_type = resp.headers.get("content-type", "").lower()
@@ -3605,6 +3730,26 @@ class HLSProxy:
                     error_body = await resp.read()
                     routing = "WARP" if (session_proxy and WARP_PROXY_URL and session_proxy == WARP_PROXY_URL) else ("BYPASS" if session_proxy is None else "PROXY")
                     logger.warning(f"⚠️ Upstream returned error {resp.status} for {stream_url} [Routing: {routing}]")
+                    # ✅ FIX DVR+Live: Notify manifest coalesce waiters on upstream error.
+                    # Mark as failed so waiters fall back to independent fetch immediately.
+                    try:
+                        if _mf_inflight_key and _mf_inflight_key in self._manifest_inflight:
+                            self._manifest_inflight_data[_mf_inflight_key] = Exception(f"Upstream {resp.status}")
+                            evt = self._manifest_inflight.pop(_mf_inflight_key, None)
+                            if evt:
+                                evt.set()
+                    except Exception:
+                        pass
+                        
+                    try:
+                        if _seg_coalesce_key and _seg_coalesce_key in self.in_flight_segments:
+                            self.in_flight_segment_data[_seg_coalesce_key] = Exception(f"Upstream {resp.status}")
+                            evt = self.in_flight_segments.pop(_seg_coalesce_key, None)
+                            if evt:
+                                evt.set()
+                    except Exception:
+                        pass
+
                     return web.Response(body=error_body, status=resp.status, headers={"Content-Type": content_type, "Access-Control-Allow-Origin": "*"})
 
                 is_direct_media_stream = request.path == "/proxy/stream" and (
@@ -3646,32 +3791,7 @@ class HLSProxy:
                             )
                         return response
 
-                # ✅ OPT: Controlla se il segmento è già in cache prefetch
-                _is_ts_segment = (
-                    request.path.endswith(".ts") or stream_url.endswith(".ts")
-                    or request.path.endswith(".m4s") or stream_url.endswith(".m4s")
-                )
-                _prefetch_hit = False
-                if _is_ts_segment:
-                    _pk = self._prefetch_cache_key(stream_url)
-                    _cached_seg = self.segment_prefetch_cache.get(_pk)
-                    if _cached_seg:
-                        _body_cached, _hdrs_cached, _exp_cached = _cached_seg
-                        if time.time() < _exp_cached:
-                            content_bytes = _body_cached
-                            _prefetch_hit = True
-                            self.segment_prefetch_cache.pop(_pk, None)
-                            logger.info(
-                                f"⚡ [Prefetch HIT] Segmento servito da cache ({len(content_bytes) // 1024}KB): "
-                                f"...{stream_url[-60:]}"
-                            )
-                        else:
-                            # Entry scaduta
-                            self.segment_prefetch_cache.pop(_pk, None)
-                            logger.debug(f"[Prefetch] Cache scaduta per {stream_url[-60:]}")
-
-                if not _prefetch_hit:
-                    content_bytes = await resp.read()
+                content_bytes = await resp.read()
                 manifest_content = None
                 try:
                     decoded_text = content_bytes.decode("utf-8", errors='replace')
@@ -3835,6 +3955,19 @@ class HLSProxy:
                         _stale = [k for k, v in list(self.manifest_cache.items()) if time.time() > v[1]]
                         for k in _stale:
                             self.manifest_cache.pop(k, None)
+
+                        # ✅ FIX DVR+Live: Notify coalesce waiters with the rewritten manifest.
+                        # Store result BEFORE setting the Event so waiters read consistent data.
+                        if _mf_inflight_key and _mf_inflight_key in self._manifest_inflight:
+                            self._manifest_inflight_data[_mf_inflight_key] = (rewritten, 200)
+                            evt = self._manifest_inflight.pop(_mf_inflight_key, None)
+                            if evt:
+                                evt.set()
+                            # Cleanup data after 3s (all waiters read within <1ms)
+                            async def _cleanup_mf_data(_key=_mf_inflight_key):
+                                await asyncio.sleep(3)
+                                self._manifest_inflight_data.pop(_key, None)
+                            asyncio.create_task(_cleanup_mf_data())
 
                     # ✅ OPT: Connection pre-warm — elimina il TCP slow start al cold start HLS.
                     # Quando serviamo il manifest sappiamo già il dominio CDN dei segmenti (è lo
@@ -4000,13 +4133,10 @@ class HLSProxy:
                 # Streaming normale per altri tipi di contenuto (segmenti binari)
                 # Il body è già stato letto in content_bytes, usiamo quello.
                 segment_was_stripped = False
-                _is_ts_seg = request.path.endswith(".ts") or stream_url.endswith(".ts")
-                if _is_ts_seg:
-                    if not _prefetch_hit:
-                        # Stripping solo se non servito da prefetch cache (già strippato al momento del prefetch)
-                        original_len = len(content_bytes)
-                        content_bytes = self._strip_fake_png_header_from_ts(content_bytes)
-                        segment_was_stripped = len(content_bytes) != original_len
+                if _is_ts_segment:
+                    original_len = len(content_bytes)
+                    content_bytes = self._strip_fake_png_header_from_ts(content_bytes)
+                    segment_was_stripped = len(content_bytes) != original_len
 
                 response_headers = {}
 
@@ -4066,14 +4196,31 @@ class HLSProxy:
                 
                 final_response = web.Response(
                     body=content_bytes,
-                    status=resp.status if not _prefetch_hit else 200,
+                    status=resp.status,
                     headers=response_headers,
                 )
+                
+                # ✅ FIX DVR+Live: Registra il segmento coalesced per gli altri client
+                if _seg_coalesce_key:
+                    self.in_flight_segment_data[_seg_coalesce_key] = (
+                        content_bytes,
+                        resp.status,
+                        response_headers,
+                    )
+                    async def cleanup_coalesce(key):
+                        await asyncio.sleep(5.0)
+                        self.in_flight_segment_data.pop(key, None)
+                        self.in_flight_segments.pop(key, None)
+                    asyncio.create_task(cleanup_coalesce(_seg_coalesce_key))
+                    
+                    evt = self.in_flight_segments.get(_seg_coalesce_key)
+                    if evt:
+                        evt.set()
 
                 # ✅ OPT: Lancia prefetch del prossimo segmento in background.
                 # Lo facciamo DOPO aver costruito la risposta (non await) per non
                 # aggiungere latenza al client. Opera solo su segmenti .ts o .m4s.
-                if _is_ts_seg:
+                if _is_ts_segment:
                     try:
                         # Recupera il manifest più recente visto per questo CDN
                         import urllib.parse as _up_pf

@@ -39,6 +39,12 @@ class VavooExtractor:
         self._cached_sig = None
         self._cached_sig_ts = 0
         self._url_cache = {}  # {url: (resolved_url, stream_headers, timestamp)}
+        # ✅ FIX: Per-URL lock to serialize concurrent force_refresh calls.
+        # When DVR + live watch the same channel, both may get a 502 and try to
+        # refresh the token simultaneously. Without this lock, N parallel lokke.app
+        # auth calls → CDN sees abuse → 502 storm. With the lock, the first caller
+        # performs the refresh; subsequent callers wait and then use the updated cache.
+        self._refresh_locks: dict = {}  # url -> asyncio.Lock
 
     def _get_random_proxy(self):
         """Restituisce un proxy casuale dalla lista."""
@@ -219,7 +225,35 @@ class VavooExtractor:
                     "mediaflow_endpoint": self.mediaflow_endpoint,
                     "disable_ssl": True,
                 }
-        
+
+        # ✅ FIX: Serialize concurrent force_refresh for the same URL.
+        # If DVR + live both get a 502 simultaneously, only the first coroutine
+        # performs the real auth/resolve; the others wait on the lock and then
+        # read the freshly populated cache instead of making duplicate API calls.
+        if url not in self._refresh_locks:
+            self._refresh_locks[url] = asyncio.Lock()
+        lock = self._refresh_locks[url]
+
+        async with lock:
+            # Re-check cache after acquiring the lock: a concurrent caller may
+            # have already refreshed the token while we were waiting.
+            if url in self._url_cache:
+                cached_url, cached_headers, ts = self._url_cache[url]
+                if time.time() - ts < 3600:
+                    logger.debug(
+                        f"[Lock] Using cache populated by concurrent refresh for: {url[:80]}..."
+                    )
+                    return {
+                        "destination_url": cached_url,
+                        "request_headers": cached_headers,
+                        "mediaflow_endpoint": self.mediaflow_endpoint,
+                        "disable_ssl": True,
+                    }
+
+            return await self._do_extract(url)
+
+    async def _do_extract(self, url: str) -> Dict[str, Any]:
+        """Internal: performs the actual resolve (called while holding the per-URL lock)."""
         resolved_url = None
         stream_headers = {}
 
