@@ -442,9 +442,19 @@ class HLSProxy:
     # ---------------------------------------------------------------------------
 
     def _prefetch_cache_key(self, url: str) -> str:
-        """Chiave deterministica (MD5 12-char) per la prefetch cache."""
+        """Chiave deterministica per la prefetch cache.
+        
+        Normalizza l'URL rimuovendo i query parameters prima dell'hashing,
+        così 'segment.ts' e 'segment.ts?disable_ssl=1' producono la STESSA chiave.
+        Questo evita download duplicati paralleli e il freeze dei client quando
+        lo stesso segmento viene richiesto con/senza ?disable_ssl=1.
+        """
         import hashlib as _hl
-        return _hl.md5(url.encode()).hexdigest()[:16]
+        import urllib.parse as _up
+        parsed = _up.urlparse(url)
+        # Chiave basata solo su schema+host+path, ignora query params
+        normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        return _hl.md5(normalized.encode()).hexdigest()[:16]
 
     def _get_next_segment_url(self, manifest_text: str, current_url: str) -> str | None:
         """
