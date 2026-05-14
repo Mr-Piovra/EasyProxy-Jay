@@ -600,6 +600,112 @@ class HLSProxy:
         if stale:
             logger.debug(f"[Prefetch] Cache cleanup: rimossi {len(stale)} segmenti scaduti")
 
+    async def _proactive_manifest_refresh(
+        self,
+        manifest_url: str,
+        manifest_headers: dict,
+        session,
+        disable_ssl: bool,
+        bypass_warp: bool,
+        delay: float = 4.0,
+    ) -> None:
+        """
+        ✅ FIX FREEZE: quando abbiamo servito l'ultimo segmento della finestra manifest,
+        re-fetcha il manifest CDN dopo `delay` secondi (anziché aspettare il poll del client
+        che avviene solo dopo ~10s = durata di un segmento).
+
+        Questo riduce il freeze da ~10s a ~delay+download_time ≈ 4-5s.
+        Fire-and-forget: qualsiasi errore viene loggato e ignorato.
+        """
+        try:
+            await asyncio.sleep(delay)
+
+            import urllib.parse as _up_pmr
+            import yarl as _yarl_pmr
+
+            _req_target = _yarl_pmr.URL(manifest_url, encoded=True)
+            req_headers = dict(manifest_headers)
+
+            async with session.get(
+                _req_target,
+                headers=req_headers,
+                ssl=not disable_ssl,
+            ) as resp:
+                if resp.status not in (200, 206):
+                    logger.debug(
+                        f"[ProactiveRefresh] Manifest upstream {resp.status} — skip"
+                    )
+                    return
+
+                content_bytes = await resp.read()
+                try:
+                    manifest_text = content_bytes.decode("utf-8", errors="replace")
+                except Exception:
+                    return
+
+                if not manifest_text.lstrip().startswith("#EXTM3U"):
+                    logger.debug("[ProactiveRefresh] Risposta non-manifest — skip")
+                    return
+
+                # Estrai segmenti dalla nuova finestra manifest
+                seg_lines = [
+                    line.strip()
+                    for line in manifest_text.splitlines()
+                    if line.strip()
+                    and not line.strip().startswith("#")
+                    and (line.strip().endswith(".ts") or line.strip().endswith(".m4s"))
+                ]
+                if not seg_lines:
+                    logger.debug("[ProactiveRefresh] Manifest senza segmenti media — skip")
+                    return
+
+                parsed_mf = _up_pmr.urlparse(manifest_url)
+                cdn_base = f"{parsed_mf.scheme}://{parsed_mf.netloc}"
+                mf_dir = cdn_base + parsed_mf.path.rsplit("/", 1)[0] + "/"
+                cdn_host = parsed_mf.netloc
+
+                # Aggiorna last_manifest_by_cdn con la nuova finestra
+                self.last_manifest_by_cdn[cdn_host] = (manifest_text, time.time(), manifest_url, manifest_headers)
+
+                # Prefetcha gli ultimi 2 segmenti (live edge)
+                new_segs = seg_lines[-2:]
+                for seg_rel in new_segs:
+                    if seg_rel.startswith("http://") or seg_rel.startswith("https://"):
+                        seg_abs = seg_rel
+                    elif seg_rel.startswith("/"):
+                        seg_abs = cdn_base + seg_rel
+                    else:
+                        seg_abs = mf_dir + seg_rel
+                    if disable_ssl and "disable_ssl" not in seg_abs:
+                        seg_abs += ("&" if "?" in seg_abs else "?") + "disable_ssl=1"
+
+                    spk = self._prefetch_cache_key(seg_abs)
+                    if (
+                        spk not in self.segment_prefetch_cache
+                        and spk not in self.segment_prefetch_in_flight
+                    ):
+                        asyncio.create_task(
+                            self._prefetch_next_segment(
+                                next_url=seg_abs,
+                                stream_headers=manifest_headers,
+                                session=session,
+                                disable_ssl=disable_ssl,
+                                bypass_warp=bypass_warp,
+                            )
+                        )
+                        logger.info(
+                            f"🚀 [ProactiveRefresh] Prefetch nuovo segmento live: ...{seg_abs[-60:]}"
+                        )
+                    else:
+                        logger.debug(
+                            f"[ProactiveRefresh] Segmento già in cache/in-flight: ...{seg_abs[-60:]}"
+                        )
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.debug(f"[ProactiveRefresh] Errore (non critico): {type(exc).__name__}: {exc}")
+
     async def shorten_hls_url(self, url: str) -> str:
         """Crea un ID breve per un URL e lo memorizza nella mappa."""
         if not url:
@@ -3610,7 +3716,9 @@ class HLSProxy:
                         _cdn_host = _up_pf.urlparse(stream_url).netloc
                         _manifest_entry = self.last_manifest_by_cdn.get(_cdn_host)
                         if _manifest_entry:
-                            _manifest_text, _mf_time = _manifest_entry
+                            _manifest_text, _mf_time = _manifest_entry[:2]
+                            _manifest_url = _manifest_entry[2] if len(_manifest_entry) > 2 else None
+                            _manifest_hdrs = _manifest_entry[3] if len(_manifest_entry) > 3 else headers
                             if time.time() - _mf_time < 30:
                                 _next_url = self._get_next_segment_url(_manifest_text, stream_url)
                                 if _next_url and _next_url != stream_url:
@@ -3628,6 +3736,24 @@ class HLSProxy:
                                                 bypass_warp=bypass_warp,
                                             )
                                         )
+                                elif _manifest_url and _next_url is None:
+                                    # ✅ FIX FREEZE: siamo all'ultimo segmento del manifest.
+                                    # Il CDN pubblicherà il prossimo ~10s dopo l'inizio del segmento.
+                                    # Invece di aspettare che il client ripolli (altri 10s di freeze),
+                                    # ri-fetchiamo il manifest CDN dopo 4s e avviamo il prefetch.
+                                    asyncio.create_task(
+                                        self._proactive_manifest_refresh(
+                                            manifest_url=_manifest_url,
+                                            manifest_headers=_manifest_hdrs,
+                                            session=session,
+                                            disable_ssl=disable_ssl,
+                                            bypass_warp=bypass_warp,
+                                            delay=4.0,
+                                        )
+                                    )
+                                    logger.debug(
+                                        f"[Prefetch] Ultimo segmento manifest — manifest refresh proattivo schedulato per ...{_manifest_url[-60:]}"
+                                    )
                         self._cleanup_prefetch_cache()
                     except Exception as _pf_ex:
                         logger.debug(f"[Prefetch] Errore nella pianificazione: {_pf_ex}")
@@ -3911,7 +4037,7 @@ class HLSProxy:
                             _mf_cdn_host = _up_mf.urlparse(stream_url).netloc
                             _mf_cdn_base = f"{_up_mf.urlparse(stream_url).scheme}://{_mf_cdn_host}"
                             _mf_dir = _mf_cdn_base + _up_mf.urlparse(stream_url).path.rsplit('/', 1)[0] + '/'
-                            self.last_manifest_by_cdn[_mf_cdn_host] = (manifest_content, time.time())
+                            self.last_manifest_by_cdn[_mf_cdn_host] = (manifest_content, time.time(), stream_url, headers)
                             logger.debug(
                                 f"[Prefetch] Media manifest salvato per CDN: {_mf_cdn_host} "
                                 f"({len(_mf_seg_lines)} segmenti)"
