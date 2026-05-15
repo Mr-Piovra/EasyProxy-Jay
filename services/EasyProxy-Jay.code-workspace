@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../../tvvoo"
+		},
+		{
+			"path": "../../mediaflow-proxy"
 		}
 	],
 	"settings": {}
