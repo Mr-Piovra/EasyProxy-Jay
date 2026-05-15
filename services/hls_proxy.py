@@ -3442,6 +3442,12 @@ class HLSProxy:
         # Priorità: proxy passato esplicitamente -> proxy in query string
         forced_proxy = forced_proxy or request.query.get("proxy") or None
 
+        # ✅ FIX DVR+Live: Inizializza i coalesce key prima del try, così il finally
+        # può accederli in sicurezza anche se un'eccezione viene sollevata prima della
+        # loro assegnazione all'interno del try.
+        _mf_inflight_key = None
+        _seg_coalesce_key = None
+
         try:
             # Ping DLStreams extractor to keep browser alive during playback
             # Use robust markers: Daddy's domains, 'premium' pattern, 'mono.css', or Referer/Origin headers
@@ -3792,7 +3798,7 @@ class HLSProxy:
                         logger.debug(f"⏳ [Prefetch Wait] Aspettando download anticipato in corso: ...{stream_url[-60:]}")
                         try:
                             await asyncio.wait_for(
-                                self.segment_prefetch_in_flight[_pk].wait(), timeout=15.0
+                                self.segment_prefetch_in_flight[_pk].wait(), timeout=5.0
                             )
                             _cached_seg = self.segment_prefetch_cache.get(_pk)
                             if not _cached_seg:
@@ -3827,7 +3833,7 @@ class HLSProxy:
                         logger.debug(f"⏳ [Coalesce] Aspettando download segmento in corso: ...{stream_url[-60:]}")
                         try:
                             await asyncio.wait_for(
-                                self.in_flight_segments[_seg_coalesce_key].wait(), timeout=15.0
+                                self.in_flight_segments[_seg_coalesce_key].wait(), timeout=5.0
                             )
                             if _seg_coalesce_key in self.in_flight_segment_data:
                                 _c_result = self.in_flight_segment_data[_seg_coalesce_key]
@@ -3883,7 +3889,7 @@ class HLSProxy:
                     logger.debug(f"⏳ [ManifestCoalesce] Waiting for in-flight manifest: {_manifest_cache_key}")
                     try:
                         await asyncio.wait_for(
-                            self._manifest_inflight[_mf_inflight_key].wait(), timeout=10.0
+                            self._manifest_inflight[_mf_inflight_key].wait(), timeout=5.0
                         )
                     except asyncio.TimeoutError:
                         logger.warning(f"⚠️ [ManifestCoalesce] Timeout waiting for manifest {_manifest_cache_key}, fetching independently")
@@ -3922,7 +3928,6 @@ class HLSProxy:
                             raise
                 if resp_ctx is None:
                     resp_ctx = session.get(request_target, headers=headers, ssl=not disable_ssl)
-
 
             async with resp_ctx as resp:
                 content_type = resp.headers.get("content-type", "").lower()
@@ -4449,7 +4454,6 @@ class HLSProxy:
 
                 return final_response
 
-
         except (ClientPayloadError, ConnectionResetError, OSError) as e:
             # Errori tipici di disconnessione del client
             logger.info(f"ℹ️ Client disconnected from stream: ...{stream_url[-60:]} ({str(e)})")
@@ -4476,6 +4480,30 @@ class HLSProxy:
                 e,
             )
             return web.Response(text=f"Stream error: {err_msg}", status=500)
+
+        finally:
+            # ✅ FIX DVR+Live: Rilascia SEMPRE i coalesce lock in caso di eccezione.
+            # Questo blocco finally è raggiunto in tutti i percorsi (return normale e eccezione).
+            # Se la risposta è già stata inviata correttamente, evt.is_set() == True e il pop
+            # è un no-op innocuo. Se invece il fetch è fallito, sblocca i waiter subito
+            # invece di lasciarli appesi per 5s al wait_for timeout.
+            try:
+                if _mf_inflight_key and _mf_inflight_key in self._manifest_inflight:
+                    _mf_evt = self._manifest_inflight.pop(_mf_inflight_key, None)
+                    if _mf_evt and not _mf_evt.is_set():
+                        self._manifest_inflight_data.setdefault(
+                            _mf_inflight_key, Exception("primary fetch aborted")
+                        )
+                        _mf_evt.set()
+                if _seg_coalesce_key and _seg_coalesce_key in self.in_flight_segments:
+                    _seg_evt = self.in_flight_segments.pop(_seg_coalesce_key, None)
+                    if _seg_evt and not _seg_evt.is_set():
+                        self.in_flight_segment_data.setdefault(
+                            _seg_coalesce_key, Exception("primary fetch aborted")
+                        )
+                        _seg_evt.set()
+            except Exception:
+                pass  # Never let cleanup crash the outer handler
 
     async def handle_playlist_request(self, request):
         """Gestisce le richieste per il playlist builder"""
