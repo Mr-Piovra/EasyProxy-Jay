@@ -593,10 +593,33 @@ class ManifestRewriter:
                 # Tutti gli altri tag (es. #EXTINF, #EXT-X-ENDLIST)
                 rewritten_lines.append(line)
 
-                # INJECTION: Ottimizzazione "Polmone" (Anti-Stuttering iniziale) per le dirette
-                # Forza il player a partire 5 secondi indietro rispetto all'ultimo segmento live,
-                # garantendo un buffer precaricato che assorbe i rallentamenti di rete senza far aspettare troppo.
-                if line.startswith("#EXT-X-TARGETDURATION:") and is_live_stream:
-                    rewritten_lines.append("#EXT-X-START:TIME-OFFSET=-5.0,PRECISE=YES")
+        # INJECTION: Ottimizzazione "Polmone" (Live Edge Trimming) per le dirette
+        # Troncando l'ultimo segmento dal manifest, forziamo il player a rimanere 1 segmento
+        # indietro rispetto al live assoluto. Nel frattempo, il proxy (che vede il manifest raw)
+        # sfrutta questo delay per prefetchare il segmento mancante in background.
+        # Quando il player chiederà il manifest successivo e vedrà il segmento, sarà già nella RAM del proxy.
+        if is_live_stream:
+            segment_count = sum(1 for line in rewritten_lines if line and not line.startswith("#"))
+            if segment_count > 2:
+                # Cerca partendo dal fondo la prima riga che non è un tag
+                for i in range(len(rewritten_lines) - 1, -1, -1):
+                    if rewritten_lines[i] and not rewritten_lines[i].startswith("#"):
+                        # Rimuovi l'URL
+                        rewritten_lines.pop(i)
+                        # Rimuovi l'EXTINF (e eventuali altri tag contigui legati al segmento)
+                        while i - 1 >= 0 and rewritten_lines[i - 1].startswith("#EXT"):
+                            # Non rimuovere tag globali se per errore ci finiscono
+                            if rewritten_lines[i - 1].startswith("#EXT-X-TARGETDURATION") or rewritten_lines[i - 1].startswith("#EXT-X-MEDIA-SEQUENCE"):
+                                break
+                            rewritten_lines.pop(i - 1)
+                            i -= 1
+                        break
+                        
+            # Forza anche lo START offset per i player che lo supportano
+            # Cerca se esiste la direttiva target duration per non metterlo a caso
+            for i, line in enumerate(rewritten_lines):
+                if line.startswith("#EXT-X-TARGETDURATION:"):
+                    rewritten_lines.insert(i + 1, "#EXT-X-START:TIME-OFFSET=-15.0,PRECISE=YES")
+                    break
 
         return "\n".join(rewritten_lines)
